@@ -1,18 +1,47 @@
 # SoundDog 项目交接文档
 
+> **项目描述**：SoundDog 是一个 STM32F407ZGT6 音频采集项目，当前阶段（A1）用 **INMP441 数字麦克风 + I2S3 + DMA** 采集 16kHz 音频，串口打印 PCM 最大值验证链路。主控 HSE 8MHz → SYSCLK 168MHz，RTOS 为 FreeRTOS CMSIS-RTOS_v2，工具链 Makefile + arm-none-eabi-gcc。
+
 > 交接日期：2026-08-16
 > 交接原因：切换 AI 助手
 > **最重要的一句话：软件成果全部完好可用，唯一阻塞是硬件——核心板因超压损坏，需要换一块新板。**
 
 ---
 
-## 一、项目是什么
+## 一、项目介绍
 
-SoundDog：STM32F407 音频采集项目，当前阶段（A1）目标是用 **INMP441 数字麦克风 + I2S3 + DMA** 采集 16kHz 音频，串口打印 PCM 最大值验证链路。
+### 1.1 一句话描述
+
+**SoundDog — 工业异响音频检测节点**：一个可复用的、支持 RS485 工业总线组网的音频异常检测节点，通过 MFCC 特征提取 + 频谱比对，在 STM32F4 上实时判断设备运行声音是否异常并上报报警。
+
+> *"Like a watchdog, but it listens."*
+
+### 1.2 核心价值
+
+| 维度 | 说明 |
+|------|------|
+| 可复用 | 框架通用，换传感器/检测参数/通信协议，核心代码不改 |
+| 工业级 | RS485 差分总线，抗干扰，支持 32+ 节点 |
+| 边缘检测 | 全部运算在 STM32 端完成，不依赖云端，延迟 < 50ms |
+| 低成本 | 单节点 BOM < 80 元 |
+| 确定性 | 传统 DSP 算法，行为可预测、可解释 |
+
+### 1.3 技术路线（三阶段）
+
+```
+Phase A: 传统 DSP（当前）→ MFCC + 特征向量 → 模版比对/阈值 → 正常/异常
+Phase B: 数据积累      → 用 Phase A 节点采集标注样本
+Phase C: 模型升级(可选) → MFCC 特征 → CMSIS-NN 二分类
+```
+
+当前处于 **Phase A**，且是 Phase A 的最早期（A1：I2S 音频采集跑通），距离 MFCC/FFT/报警还有距离。
+
+### 1.4 技术栈
 
 - 主控：STM32F407ZGT6，HSE 8MHz，SYSCLK 168MHz
-- RTOS：FreeRTOS CMSIS-RTOS_v2（当前 1 个占位任务 defaultTask）
+- RTOS：FreeRTOS CMSIS-RTOS_v2（当前 1 个占位任务 defaultTask，规划 6 个）
 - 工具链：Makefile + mingw32-make + arm-none-eabi-gcc（路径 `C:\ST\STM32CubeCLT_1.21.0\`）
+- 外设规划：I2S3(INMP441) / I2C1(OLED+SHT30) / USART1(调试) / USART3(RS485) / TIM3(LED PWM) / SPI2(Flash)
 
 > **CodeGraph 已索引**：`.codegraph/codegraph.db`（10.4MB）已覆盖全部代码（含 `firmware/soundDog/`），可直接用 `codegraph_explore` / `codegraph explore` 查代码，无需重新索引。偶发 watchdog 重启（日志 #850 报错）不影响索引数据，重启即恢复。
 

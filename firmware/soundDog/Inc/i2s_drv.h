@@ -73,16 +73,20 @@ uint32_t I2S_DRV_GetFrameCount(void);
 /**
  * @brief  从 INMP441 原始 32-bit 帧提取 16-bit PCM
  *
- * INMP441 在 32-bit I2S 槽的高 24-bit 输出数据（MSB 对齐）。
- * 本函数右移 8 位得到 24-bit 有符号值，再取高 16 位转为 16-bit PCM。
+ * 实测（BUG-20260816-002）：本工程 I2S3 的 32-bit 帧与 INMP441 的 WS 槽
+ * 存在 16 SCK（半槽）相位偏移，帧结构为 [16 位音频][16 位空闲(0xFFFF)]，
+ * 音频位于 32 位字的高 16 位（bits[31:16]），低 16 位是空闲/上拉电平。
+ *
+ * 因此直接取高 16 位即为 16-bit 有符号 PCM（INMP441 24-bit 数据的高 16 位，
+ * 即有效音频位）。若以后修正了 WS 相位使数据回到 bits[31:8]，需改回
+ * (int16_t)(raw >> 8) 语义。
  *
  * @param  raw   DMA 收到的原始 uint32_t
  * @retval 16-bit 有符号 PCM 值
  */
 static inline int16_t I2S_DRV_ExtractPCM(uint32_t raw)
 {
-    int32_t pcm24 = (int32_t)(raw >> 8);   /* 24-bit 补码 */
-    return (int16_t)(pcm24 >> 8);           /* 取高 16 位 */
+    return (int16_t)(raw >> 16);   /* 音频在高 16 位（实测对齐） */
 }
 
 #ifdef __cplusplus

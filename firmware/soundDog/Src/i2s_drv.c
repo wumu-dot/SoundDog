@@ -82,6 +82,11 @@ void HAL_I2S_RxHalfCpltCallback(I2S_HandleTypeDef *hi2s)
     if (hi2s->Instance != SPI3) return;  /* 仅处理 I2S3 */
     if (user_callback == NULL)   return;
 
+    /* 清除 OVR 溢出标志（读 DR + 读 SR），防止 I2S 接收停摆（DIAG v5） */
+    if (__HAL_I2S_GET_FLAG(hi2s, I2S_FLAG_OVR)) {
+        __HAL_I2S_CLEAR_OVRFLAG(hi2s);
+    }
+
     /* 提取半区 0: dma_buf[0 .. I2S_HALF_BUF_SIZE-1] */
     extract_frame(dma_buf, I2S_HALF_BUF_SIZE);
     user_callback(&current_frame);
@@ -96,6 +101,11 @@ void HAL_I2S_RxCpltCallback(I2S_HandleTypeDef *hi2s)
 {
     if (hi2s->Instance != SPI3) return;  /* 仅处理 I2S3 */
     if (user_callback == NULL)   return;
+
+    /* 清除 OVR 溢出标志（DIAG v5） */
+    if (__HAL_I2S_GET_FLAG(hi2s, I2S_FLAG_OVR)) {
+        __HAL_I2S_CLEAR_OVRFLAG(hi2s);
+    }
 
     /* 提取半区 1: dma_buf[I2S_HALF_BUF_SIZE .. I2S_FULL_BUF_SIZE-1] */
     extract_frame(&dma_buf[I2S_HALF_BUF_SIZE], I2S_HALF_BUF_SIZE);
