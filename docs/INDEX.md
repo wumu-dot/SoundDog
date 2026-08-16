@@ -34,12 +34,13 @@
 | `features/.template.md` | FEAT 5阶段开发模板（准备→设计→实现→测试→审查） |
 | `bugs/.template.md` | Bug 登记模板 |
 | `summary/lessons_summary.md` | 从故障记录提炼的通用规范 |
-| `troubleshooting/bug_shturl` | 历史故障复现、根因与修复记录（8条） |
+| `troubleshooting/bug_shturl` | 历史故障复现、根因与修复记录（9条） |
 | `bugs/BUG-20260728-001-*.md` | CubeMX 重新生成后手动 include 丢失 |
 | `bugs/BUG-20260728-002-*.md` | Makefile C_SOURCES 缺少手动添加的源文件 |
 | `bugs/BUG-20260728-003-*.md` | CubeMX 时钟树 PLLI2S_N/R 灰色不可编辑 |
 | `bugs/BUG-20260728-004-*.md` | DOC-STATE 构建系统切换后漂移 |
 | `bugs/BUG-20260815-001-*.md` | CubeMX 未配 Serial Wire 导致 SWD 锁死（P0 假砖） |
+| `bugs/BUG-20260816-001-*.md` | I2S DMA Size 翻倍导致缓冲区溢出踩坏 RTOS（P0） |
 | `../firmware/flash_isp.bat` | ISP 串口救砖烧录（BOOT0 + USART1） |
 | `../firmware/check_doc.bat` | DOC-STATE 漂移检测（双击运行） |
 | `../firmware/check_doc_fix.bat` | DOC-STATE 漂移自动修复（双击运行） |

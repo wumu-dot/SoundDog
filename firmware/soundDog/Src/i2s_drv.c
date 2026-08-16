@@ -121,10 +121,22 @@ HAL_StatusTypeDef I2S_DRV_Init(I2S_HandleTypeDef *hi2s, audio_frame_callback_t c
     memset(dma_buf, 0, sizeof(dma_buf));
     memset(&current_frame, 0, sizeof(current_frame));
 
-    /* 启动 DMA 循环接收（总长度 = 2 × 半区大小） */
+    /* 启动 DMA 循环接收
+     *
+     * ⚠️ 踩坑记录（BUG-20260816-001）：
+     * 本工程 DMA 配置为 32 位宽（PSIZE=WORD，CubeMX 生成），DMA NDTR 按 32 位字计数，
+     * 每次 I2S 帧（32-bit）触发 1 次 32 位搬运。
+     * 但 HAL_I2S_Receive_DMA 对 24/32-bit 格式会把 Size 翻倍（RxXferSize = Size<<1，
+     * 其心智模型是"按 16 位半字计数"），因此：
+     *   - 传 I2S_FULL_BUF_SIZE(1024) → NDTR=2048 字 = 8192 字节 → 溢出 dma_buf(4096B)
+     *     4096 字节，启动后 ~32ms 开始踩坏紧随其后的 huart1 / FreeRTOS 全局区
+     *     （pxReadyTasksLists 等）→ 串口打印丢失 + RTOS 调度器 HardFault。
+     *   - 传 I2S_HALF_BUF_SIZE(512)  → NDTR=1024 字 = 4096 字节 = dma_buf 正好；
+     *     半满中断在 512 采样处触发，与驱动双缓冲设计吻合。✓
+     */
     HAL_StatusTypeDef ret = HAL_I2S_Receive_DMA(hi2s,
                                                 (uint16_t *)dma_buf,
-                                                I2S_FULL_BUF_SIZE);
+                                                I2S_HALF_BUF_SIZE);
     return ret;
 }
 
