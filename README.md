@@ -69,7 +69,7 @@ firmware/soundDog/      STM32 工程（CubeMX 生成 + 手写驱动）
   ├── Src/i2s_drv.c     手写 I2S3 DMA 双缓冲采集驱动
   ├── Inc/pin_config.h  引脚映射权威来源（改引脚只改这一个文件）
   └── soundDog.ioc      CubeMX 工程文件
-docs/                   文档体系（bugs/、troubleshooting/、tools/…）
+docs/                   文档体系（features/ 两级FEAT、bugs/、troubleshooting/、tools/…）
 HANDOFF.md              交接文档（接线、踩坑记录、新板跑通清单）
 CLAUDE.md               项目全局上下文（会话自动继承）
 PROJECT_PLAN.md         总体规划（A1→A5 阶段）

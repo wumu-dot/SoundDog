@@ -196,9 +196,9 @@ INMP441 ──I2S──→ DMA 双缓冲 ──→ PDM→PCM ──→ 分帧+�
 
 | 外设 | GPIO | AF | 功能 |
 |------|------|----|------|
-| I2S3_CK | PC10 | AF6 | INMP441 位时钟 |
+| I2S3_CK | PB3 | AF6 | INMP441 位时钟 |
 | I2S3_WS | PA4 | AF6 | INMP441 字选 |
-| I2S3_SD | PC12 | AF6 | INMP441 数据输入 |
+| I2S3_SD | PB5 | AF6 | INMP441 数据输入 |
 | I2C1_SCL | PB6 | AF4 | OLED + SHT30 |
 | I2C1_SDA | PB7 | AF4 | OLED + SHT30 |
 | USART3_TX | PD8 | AF7 | RS485 → MAX3485 DI |
@@ -369,7 +369,7 @@ risym U485         面包板 A排        MAX3485 ×2
   - 防抖参数可调（异常帧阈值、恢复帧阈值）
 
 - [ ] **A5: RS485 通信**
-  - USART3 + MAX485 驱动 (DE/RE 方向控制)
+  - USART3 + MAX3485 驱动 (DE/RE 方向控制)
   - 协议帧打包/解析 (含 CRC16 校验)
   - PC 端 USB转RS485 收发验证
   - 主从轮询时序测试

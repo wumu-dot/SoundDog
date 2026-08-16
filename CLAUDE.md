@@ -26,6 +26,9 @@ HAL 时基：TIM7（独立于 FreeRTOS 的 SysTick，互不抢心跳）
 | 查外部资料（原理图/手册/例程） | `外部资源索引.md` |
 | 编译或烧录失败 | `firmware/build.sh` / `firmware/build_and_flash.bat` |
 | 搭建开发环境 | `docs/tools/dev-setup.md`（CodeGraph + Ponytail + OpenCLI） |
+| 规划功能方向（开父FEAT） | `docs/features/.template-parent.md` |
+| 实现具体功能（开子FEAT） | `docs/features/.template-child.md` |
+| 出问题快速定位（文件→FEAT反查） | `docs/features/维护地图.md` |
 
 ## 开发硬性边界
 1. 禁止修改 `firmware/Drivers/` 下 HAL 库文件；App 层开发仅通过 CubeMX 配置和适配层接口

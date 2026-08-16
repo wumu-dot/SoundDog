@@ -13,7 +13,9 @@
 | 加/改FreeRTOS任务 | `PROJECT_PLAN.md` §5.1 |
 | 调试HardFault死机 | `docs/tools/gdb_debug.md` |
 | 编译构建报错 | `docs/troubleshooting/bug_shturl` + `docs/bugs/` |
-| 功能开发流程 | `docs/features/.template.md`（5阶段模板） |
+| 规划功能方向（父FEAT） | `docs/features/.template-parent.md` |
+| 实现具体功能（子FEAT，5阶段） | `docs/features/.template-child.md` |
+| 出问题快速定位 | `docs/features/维护地图.md`（文件→FEAT反查） |
 | Bug登记 | `docs/bugs/.template.md` |
 | 历史故障查询 | `docs/troubleshooting/bug_shturl` |
 | 经验教训提炼 | `docs/summary/lessons_summary.md` |
@@ -31,7 +33,11 @@
 | `tools/gdb_debug.md` | CodeGraph → OpenOCD → GDB 硬件调试教程 |
 | `tools/dev-setup.md` | 开发环境搭建指南（CodeGraph + Ponytail + OpenCLI） |
 | `tools/skills.md` | `/flash` `/debug` `/check` `/style` 技能速查 |
-| `features/.template.md` | FEAT 5阶段开发模板（准备→设计→实现→测试→审查） |
+| `features/.template-parent.md` | 父FEAT统筹模板（方向+项目表+依赖+DoD） |
+| `features/.template-child.md` | 子FEAT实现模板（5阶段+12AC+回填+维护） |
+| `features/INDEX.md` | 两级FEAT索引进度（A1~A7） |
+| `features/维护地图.md` | 文件→FEAT 反查定位（维护与调试入口） |
+| `features/FEAT-A1~A7-*.md` | SoundDog 各阶段父FEAT + 子FEAT 文档 |
 | `bugs/.template.md` | Bug 登记模板 |
 | `summary/lessons_summary.md` | 从故障记录提炼的通用规范 |
 | `troubleshooting/bug_shturl` | 历史故障复现、根因与修复记录（10条） |
