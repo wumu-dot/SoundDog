@@ -8,7 +8,7 @@ DOC_FILE="${2:-CLAUDE.md}"
 
 echo "🔨 编译校验"
 
-# 检测构建系统
+# 自动检测构建系统
 if [ -f "$SRC_DIR/Makefile" ]; then
     cd "$SRC_DIR" && make clean && make -j6 all
     BUILD_OK=$?
@@ -38,22 +38,22 @@ cd "$(dirname "$0")/.."
 echo "📋 规范检查"
 PASS=1
 
-# FreeRTOS最小任务堆栈
+# FreeRTOS 最小任务堆栈
 FREERTOS_CONFIG=$(find "$SRC_DIR" -name "FreeRTOSConfig.h" 2>/dev/null | head -1)
 if [ -n "$FREERTOS_CONFIG" ]; then
     STACK_MIN=$(grep "configMINIMAL_STACK_SIZE" "$FREERTOS_CONFIG" | grep -o '[0-9]\+' | tail -1)
     if [ -n "$STACK_MIN" ] && [ "$STACK_MIN" -lt 128 ]; then
-        echo "❌ configMINIMAL_STACK_SIZE最小128，当前: $STACK_MIN"
+        echo "❌ configMINIMAL_STACK_SIZE 最小128字，当前: $STACK_MIN"
         PASS=0
     fi
 fi
 
-# HSE晶振 (仅STM32)
+# HSE 晶振范围 (仅 STM32)
 HSE_FILE=$(find "$SRC_DIR" -name "stm32f4xx_hal_conf.h" 2>/dev/null | grep -v TEMPLATE | head -1)
 if [ -n "$HSE_FILE" ]; then
-    HSE_VAL=$(grep '#define\s*HSE_VALUE' "$HSE_FILE" | grep -v '#if' | grep -o '[0-9]\+' | head -1)
+    HSE_VAL=$(grep '#define\s*HSE_VALUE' "$HSE_FILE" | grep -v '^\s*//\|^\s*#if' | grep -o '[0-9]\+' | head -1)
     if [ -n "$HSE_VAL" ] && { [ "$HSE_VAL" -lt 4000000 ] || [ "$HSE_VAL" -gt 25000000 ]; }; then
-        echo "❌ HSE_VALUE需在4M~25M区间，当前: $HSE_VAL"
+        echo "❌ HSE_VALUE 需在 4M~25M 区间，当前: $HSE_VAL"
         PASS=0
     fi
 fi
@@ -62,6 +62,6 @@ fi
 echo "✅ 规范检查通过"
 
 echo "📋 文档漂移检查"
-bash scripts/check-doc-drift.sh "$SRC_DIR" "$DOC_FILE" || { echo "❌ 请更新CLAUDE.md DOC-STATE"; exit 1; }
+bash scripts/check-doc-drift.sh "$SRC_DIR" "$DOC_FILE" || { echo "❌ 请更新 CLAUDE.md DOC-STATE"; exit 1; }
 
 echo "✅ 全量CI通过"

@@ -1,33 +1,41 @@
 # 项目全局上下文（会话自动继承）
-<!-- DOC-STATE: CHIP=STM32F407ZGT6, RTOS=FreeRTOS/CMSIS-RTOS_v2, BUILD=STM32CubeIDE+arm-none-eabi-gcc, TASKS=6, HSE=8000000, MIN_STACK=128 -->
+<!-- DOC-STATE: CHIP=STM32F407ZGT6, RTOS=FreeRTOS/CMSIS-RTOS_v2, BUILD=STM32CubeIDE+arm-none-eabi-gcc, TASKS=1, HSE=8000000, MIN_STACK=128 -->
 
 ## 硬件平台
 主控：STM32F407ZGT6 | HSE=8MHz PLL→SYSCLK 168MHz | 调试接口 ST-Link SWD
-外设：I2S3 (INMP441 数字麦克风) | I2C1 (OLED SSD1306 + SHT30 温湿度) | USART1 (调试串口) | USART3 (RS485 MAX3485) | TIM3 CH3/CH4 (LED PWM) | SPI2 (Flash)
+引脚映射权威来源：`firmware/soundDog/Inc/pin_config.h`（改引脚只改这一个文件，CLAUDE.md 不重复维护）
 
 ## 软件环境
-RTOS：FreeRTOS CMSIS-RTOS_v2 抢占式，共 6 个业务任务
+RTOS：FreeRTOS CMSIS-RTOS_v2 抢占式，当前 1 个占位任务（规划 6 个）
 驱动库：STM32 HAL (CubeMX 生成)
-编译构建：STM32CubeIDE + arm-none-eabi-gcc
+编译构建：Makefile + mingw32-make + arm-none-eabi-gcc（也有 CubeIDE 工程可选用）
 
 ## 固定全局宏（禁止随意修改）
 HSE_VALUE=8000000；configMINIMAL_STACK_SIZE=128，业务任务堆栈最低256字；
-NVIC Priority Group 4（16级抢占），DMA1_Stream2 (I2S3) 优先级最高
+NVIC Priority Group 4（16级抢占），FreeRTOS `configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY=5`
+中断优先级铁律：0~4 禁止调 FreeRTOS FromISR API，仅 5~15 可安全调用
+HAL 时基：TIM7（独立于 FreeRTOS 的 SysTick，互不抢心跳）
 
 ## 场景导航（做X前先读Y）
 | 你要做什么 | 先读这个 |
 |-----------|---------|
-| 改引脚/外设配置 | `firmware/Core/Inc/` + `CubeMX实操步骤.md` |
+| 改引脚/外设配置 | `firmware/soundDog/Inc/pin_config.h` + `CubeMX实操步骤.md` |
 | 改FreeRTOS任务 | `PROJECT_PLAN.md` §5.1 |
 | 音频采集/DSP调试 | `准备工作.md` |
 | I2S/INMP441 问题 | `CubeMX_I2S3配置详解.md` + `外部资源索引.md` |
 | 查外部资料（原理图/手册/例程） | `外部资源索引.md` |
-| 编译或烧录失败 | `scripts/ci_local.sh` |
+| 编译或烧录失败 | `firmware/build.sh` / `firmware/build_and_flash.bat` |
 | 搭建开发环境 | `docs/tools/dev-setup.md`（CodeGraph + Ponytail + OpenCLI） |
 
 ## 开发硬性边界
 1. 禁止修改 `firmware/Drivers/` 下 HAL 库文件；App 层开发仅通过 CubeMX 配置和适配层接口
-2. 中断优先级固定分组4（NVIC_PriorityGroup_4），DMA I2S 流中断优先级为 1/0，不可降低
+2. 中断优先级固定分组4（NVIC_PriorityGroup_4）
+3. FreeRTOS 中断优先级铁律：
+   - `configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY = 5`
+   - 优先级 0~4（数值小）= 不可调用任何 FreeRTOS FromISR API
+   - 优先级 5~15（数值大）= 可安全调用 FromISR（如 `xTaskNotifyFromISR`）
+   - SysTick (15)=FreeRTOS 内核 tick，TIM7 (TICK)=HAL 时基，互不抢心跳
+   - DMA1_Stream2 (I2S3) = 5，不可降到 4 以下
 
 ---
 ## 芯片预设（检测到对应平台时自动填入）
@@ -38,9 +46,9 @@ NVIC Priority Group 4（16级抢占），DMA1_Stream2 (I2S3) 优先级最高
 | 调试接口 | ST-Link SWD |
 | RTOS | FreeRTOS CMSIS-RTOS_v2 |
 | 驱动库 | STM32 HAL |
-| 编译构建 | STM32CubeIDE + arm-none-eabi-gcc |
+| 编译构建 | Makefile + mingw32-make + arm-none-eabi-gcc |
 | 固定宏 | HSE_VALUE=8000000；configMINIMAL_STACK_SIZE=128，业务任务堆栈最低256字 |
-| 硬性边界 | 禁止修改 firmware/Drivers/ HAL 底层库文件；中断优先级固定分组4 |
+| 硬性边界 | 禁止修改 firmware/Drivers/ HAL 底层库文件；中断优先级固定分组4；FreeRTOS ISR 优先级 ≥ 5 |
 
 ### ESP32 系列
 | 字段 | 值 |

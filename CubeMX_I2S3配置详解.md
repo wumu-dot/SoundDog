@@ -175,11 +175,11 @@ HSE (8MHz)
 
 公式：
 ```
-SCK = I2SxCLK / (64 × I2SDIV)     （24-bit on 32-bit frame）
-Fs  = I2SxCLK / (64 × I2SDIV)     = SCK / 64 = 16 kHz
+SCK = I2SxCLK / (2 × I2SDIV)      （F4 I2S 硬件分频：SCK = I2SxCLK / [(2×I2SDIV)+ODD]，此处 ODD=0）
+Fs  = SCK / 64 = I2SxCLK / (2 × I2SDIV × 64) = 16 kHz   （Philips 32bit：一帧 64 SCK = 左右各 32）
 
 要让 SCK = 1.024 MHz：
-I2SDIV = I2SxCLK / 1,024,000      （需要是整数，且 ODD=0 时为偶数）
+I2SDIV = I2SxCLK / (2 × 1,024,000) = I2SxCLK / 2,048,000 （需要是整数，且 ODD=0 时为偶数）
 ```
 
 **推荐配置：**
@@ -192,8 +192,8 @@ I2SDIV = I2SxCLK / 1,024,000      （需要是整数，且 ODD=0 时为偶数）
 
 验证：
 ```
-I2SDIV = 51,200,000 / 1,024,000 = 50（整数！）
-SCK = 51,200,000 / 50 = 1,024,000 Hz = 1.024 MHz ✅
+I2SDIV = 51,200,000 / 2,048,000 = 25（整数！）
+SCK = 51,200,000 / (2 × 25) = 1,024,000 Hz = 1.024 MHz ✅
 Fs  = 1,024,000 / 64 = 16,000 Hz ✅（精确 16kHz）
 ```
 
@@ -201,12 +201,12 @@ Fs  = 1,024,000 / 64 = 16,000 Hz ✅（精确 16kHz）
 
 | PLLI2S_N | PLLI2S_R | I2SxCLK | I2SDIV | SCK |
 |----------|----------|---------|--------|-----|
-| 256 | 5 | 51.2 MHz | 50 | 1.024 MHz ✅ |
+| 256 | 5 | 51.2 MHz | 25 | 1.024 MHz ✅ |
 | 200 | 5 | 40.0 MHz | - | 非整数 ❌ |
 | 192 | 4 | 48.0 MHz | - | 非整数 ❌ |
 | 200 | 4 | 50.0 MHz | - | 非整数 ❌ |
 | 320 | 5 | 64.0 MHz | - | 非整数 ❌ |
-| 256 | 5 | 51.2 MHz | 50 | 1.024 MHz ← 就这个 |
+| 256 | 5 | 51.2 MHz | 25 | 1.024 MHz ← 就这个 |
 
 > **CubeMX 会帮你自动计算 I2SDIV**，配置完 I2S3 后切回时钟树页面可以验证 SCK 是否准确。
 
@@ -219,6 +219,47 @@ PCLK1:      42 MHz   (APB1, 定时器除外)
 PCLK2:      84 MHz   (APB2, 定时器除外)
 PLLI2S_R:   51.2 MHz (给 I2S3)
 ```
+
+### 3.4 I2S3 参数校验清单
+
+> 配完后对照此表逐项确认，确保一步到位不出错。
+
+#### Mode 面板
+
+| 参数 | 正确值 | 说明 |
+|------|--------|------|
+| Mode | **Half-Duplex Master** | 主机半双工，INMP441 只有单向 SD |
+| Master Clock Output | **☐ 不勾选** | INMP441 三线制 (SCK/WS/SD)，不需要 MCK |
+
+#### Parameter Settings
+
+| 参数 | 正确值 | 说明 |
+|------|--------|------|
+| Transmission Mode | **Master Receive** | ← 关键！麦克风是接收，不是发送 |
+| Communication Standard | **I2S Philips** | INMP441 数据手册明确标注 |
+| Data and Frame Format | **32 Bits Data on 32 Bits Frame** | ESP32 社区验证 |
+| Selected Audio Frequency | **16 KHz** | 目标采样率 |
+| Real Audio Frequency | **16.0 KHz** | 确认显示 |
+| Error | **0.0 %** | 必须 0% |
+
+#### Clock Parameters
+
+| 参数 | 正确值 | 说明 |
+|------|--------|------|
+| Clock Source | **I2S PLL Clock** | 使用 PLLI2S 专用时钟 |
+| Clock Polarity | **Low** | 标准 I2S 极性 |
+
+#### Clock Configuration 验证
+
+| 节点 | 值 | 计算结果 |
+|------|-----|---------|
+| PLLI2S_N | **×256** | VCO = 1MHz × 256 = 256 MHz |
+| PLLI2S_R | **/5** | I2SxCLK = 256 / 5 = **51.2 MHz** |
+| I2SDIV (自动) | **25** | 51,200,000 / 2,048,000 = 25 |
+| SCK | **1.024 MHz** | 51.2 MHz / (2×25) = 1.024 MHz |
+| Fs | **16,000 Hz** | 1.024 MHz / 64 = 16 kHz |
+
+> 链路：`HSE 8MHz → /PLLM(8) → ×PLLI2S_N(256) → /PLLI2S_R(5) → I2SxCLK 51.2MHz → I2SDIV=25 → SCK 1.024MHz（=51.2M/(2×25)）→ /64 → Fs 16kHz`
 
 ---
 
@@ -273,6 +314,14 @@ STM32F407 核心板         INMP441 模块
 │ GND          │─────→│ L/R (SEL)     │  ← 接地 = 数据在 WS=高 的槽位输出
 └──────────────┘      └──────────────┘
 ```
+
+> ⚠️ **SD 上拉电阻**：INMP441 的 SD 引脚是**开漏输出（open-drain）**，必须外接上拉电阻才能正确输出高电平。在 PC12 ← SD 这根线上，加一个 **4.7kΩ 电阻接到 3.3V**：
+> ```
+> 3.3V ──[4.7kΩ]──┬── PC12 (I2S3_SD)
+>                  │
+>                  └── INMP441 SD
+> ```
+> 如果不接：读到数据可能全是 `0xFF`（一直高）或全是 `0x00`（一直低），看起来"有数据"但实际不随声音变化。
 
 #### ⚠️ L/R 引脚的重要发现（来自 ESP32 实测）
 

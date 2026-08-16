@@ -1,3 +1,12 @@
 # 故障记录
 # 格式: YYYY-MM-DD | 错误关键词 | 根因 | 修复方案 | 影响文件
 # CI 编译失败时自动检索此文件匹配同类故障
+
+2026-07-28 | unknown type name 'audio_frame_t' / implicit declaration I2S_DRV_Init | CubeMX 重新生成 Makefile 工程时 main.c 仅保留 USER CODE BEGIN/END 之间的代码，#include "i2s_drv.h" 写在 CubeMX 注释区外被覆盖删除 | 将 #include "i2s_drv.h" 和 #include <stdio.h> 放入 /* USER CODE BEGIN Includes */ 之间（CubeMX 保留区） | main.c
+2026-07-28 | implicit declaration of function 'printf' / incompatible implicit declaration | #include <stdio.h> 放在 /* USER CODE BEGIN 0 */（Private user code区，位于文件末尾），但 test_frame_cb 回调函数在 /* USER CODE BEGIN PV */（变量区，文件前部）就先调用了 printf | 将 #include <stdio.h> 移到 /* USER CODE BEGIN Includes */ 与 i2s_drv.h 一同（任何函数之前） | main.c
+2026-07-28 | undefined reference / i2s_drv.c not compiled | CubeMX 生成 Makefile 时 C_SOURCES 列表只包含它自己生成的文件，手动加入的 i2s_drv.c 不在编译列表 | 在 Makefile 的 C_SOURCES 列表中添加 Src/i2s_drv.c | Makefile
+2026-07-28 | static function defined inside main() | test_frame_cb 定义在 main() 函数体内（GNU C 嵌套函数扩展），ARM 嵌入式不支持 | 将回调函数移到 main() 外部的 /* USER CODE BEGIN PV */ 区域 | main.c
+2026-07-28 | DOC-STATE BUILD 字段漂移 | 项目从 STM32CubeIDE 切 Makefile 后 DOC-STATE 的 BUILD 仍是 STM32CubeIDE | 运行 scripts/check-doc-drift.sh --fix 自动修复，或手动改 CLAUDE.md DOC-STATE 行 | CLAUDE.md
+2026-07-28 | DOC-STATE TASKS 字段漂移 (6→1) | DOC-STATE 记录的 TASKS=6 是规划值，实际代码只有 1 个 osThreadNew（defaultTask 占位） | 运行 --fix 自动同步为实际值 | CLAUDE.md
+2026-07-28 | CubeMX Clock Configuration PLLI2S_N/R 灰色不可编辑 | 先切到 Clock Configuration 页就去找 PLLI2S，但 I2S3 外设尚未配置或 Clock Source 未选 PLLI2S | 正确顺序: Pinout 分配 I2S3 引脚 → I2S3 Mode 选 Half-Duplex Master → Clock Source 选 I2S PLL Clock → 切回 Clock Configuration → PLLI2S_N/R 解锁 | CubeMX .ioc
+2026-08-15 | init mode failed / unable to connect to the target / Unable to get core ID | CubeMX 未配 SYS→Debug→Serial Wire，gpio.c 把 PA13/PA14 设成 Analog，固件运行时关闭 SWD → 首次烧录成功（芯片空白），之后永远连不上 | 根治: CubeMX 配 Serial Wire；救砖: BOOT0 拉高进 ISP 用 STM32_Programmer_CLI 串口烧录 (firmware/flash_isp.bat) | gpio.c + soundDog.ioc + flash_isp.bat
