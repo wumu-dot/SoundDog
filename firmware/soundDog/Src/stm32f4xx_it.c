@@ -57,6 +57,7 @@
 /* External variables --------------------------------------------------------*/
 extern DMA_HandleTypeDef hdma_spi3_rx;
 extern TIM_HandleTypeDef htim7;
+extern I2S_HandleTypeDef hi2s3;
 
 /* USER CODE BEGIN EV */
 
@@ -200,6 +201,18 @@ void TIM7_IRQHandler(void)
   /* USER CODE BEGIN TIM7_IRQn 1 */
 
   /* USER CODE END TIM7_IRQn 1 */
+}
+
+/**
+  * @brief This function handles SPI3 global interrupt.
+  * @note  DIAG v8: 最小化处理——只清 OVR 标志，不调用 HAL_I2S_IRQHandler
+  *        （HAL 的 OVR 处理会禁用中断并重置 State，反而破坏 DMA 会话）。
+  */
+void SPI3_IRQHandler(void)
+{
+  if (__HAL_I2S_GET_FLAG(&hi2s3, I2S_FLAG_OVR)) {
+    __HAL_I2S_CLEAR_OVRFLAG(&hi2s3);
+  }
 }
 
 /* USER CODE BEGIN 1 */

@@ -82,8 +82,8 @@ void HAL_I2S_RxHalfCpltCallback(I2S_HandleTypeDef *hi2s)
     if (hi2s->Instance != SPI3) return;  /* 仅处理 I2S3 */
     if (user_callback == NULL)   return;
 
-    /* 清除 OVR 溢出标志（读 DR + 读 SR），防止 I2S 接收停摆（DIAG v5） */
-    if (__HAL_I2S_GET_FLAG(hi2s, I2S_FLAG_OVR)) {
+    /* 稳健清除 OVR：数据持续到达时单次清除可能失败，循环直到清掉 */
+    for (int i = 0; i < 4 && __HAL_I2S_GET_FLAG(hi2s, I2S_FLAG_OVR); i++) {
         __HAL_I2S_CLEAR_OVRFLAG(hi2s);
     }
 
@@ -102,8 +102,8 @@ void HAL_I2S_RxCpltCallback(I2S_HandleTypeDef *hi2s)
     if (hi2s->Instance != SPI3) return;  /* 仅处理 I2S3 */
     if (user_callback == NULL)   return;
 
-    /* 清除 OVR 溢出标志（DIAG v5） */
-    if (__HAL_I2S_GET_FLAG(hi2s, I2S_FLAG_OVR)) {
+    /* 稳健清除 OVR（DIAG v8） */
+    for (int i = 0; i < 4 && __HAL_I2S_GET_FLAG(hi2s, I2S_FLAG_OVR); i++) {
         __HAL_I2S_CLEAR_OVRFLAG(hi2s);
     }
 
@@ -147,6 +147,16 @@ HAL_StatusTypeDef I2S_DRV_Init(I2S_HandleTypeDef *hi2s, audio_frame_callback_t c
     HAL_StatusTypeDef ret = HAL_I2S_Receive_DMA(hi2s,
                                                 (uint16_t *)dma_buf,
                                                 I2S_HALF_BUF_SIZE);
+
+    /* ===== DIAG v8: I2S 中断配置（避免 HAL 的破坏性 OVR 处理） =====
+     * 1) 强制关 RXNE 中断（RXNEIE）：数据只走 DMA，防止中断和 DMA 抢 DR；
+     * 2) 只开错误中断（ERRIE），SPI3 中断里仅清 OVR，不动 HAL 状态机。 */
+    if (ret == HAL_OK) {
+        CLEAR_BIT(hi2s->Instance->CR2, SPI_CR2_RXNEIE);
+        SET_BIT(hi2s->Instance->CR2, SPI_CR2_ERRIE);
+        HAL_NVIC_SetPriority(SPI3_IRQn, 5, 0);
+        HAL_NVIC_EnableIRQ(SPI3_IRQn);
+    }
     return ret;
 }
 
