@@ -25,14 +25,14 @@
 |------|----------|
 | 范围内（可改） | 新建上位机 `gui/` 模块（频谱窗口、数据队列、绘图刷新） |
 | 超出范围（禁止碰） | `firmware/Drivers/` HAL；板端 A2-04 格式（本 FEAT 只做 PC 端接收解析，格式以 A2-04 定稿为准） |
-| 外部依赖 | A8-01 通信层、A2-04 频谱输出（板端）、**PySide6（需补装）+ matplotlib 3.10.0（已装）** |
+| 外部依赖 | A8-01 通信层、A2-04 频谱输出（板端）、**matplotlib 3.10.0 + tkinter（Anaconda 自带，零安装）** |
 
 ### 1.4 关键参数与接口（事实包 §3 + 父 FEAT-A8，禁止自造）
 - **数据源**：板端 A2-04 串口输出，**一行 32 个整数**（能量），**~200ms 节流**（事实包 A2-04）。
-- **UI**：PySide6 主窗口 + 绘图组件；刷新周期 ~200ms（与数据节流一致，避免队列堆积）。
-- **绘图库**：**matplotlib 3.10.0（Anaconda 已装，事实包 §3.7）**；如需更高刷新性能再评估 pyqtgraph（**待定需人确认**）。
-- **运行环境**：**Anaconda Python 3.13.5**（`C:\Users\wumu2\anaconda3\python.exe`）；需补装 **PySide6**（`-m pip install PySide6`）；⚠️ 勿用 conda 命令。
-- **数据流**：A8-01 comm 收到频谱帧 → 解析 32 整数 → 入队（线程安全）→ GUI 定时器取队绘制。
+- **UI**：**tkinter 主窗口 + matplotlib 绘图组件**（`FigureCanvasTkAgg`）；刷新周期 ~200ms（与数据节流一致，避免队列堆积）。
+- **绘图库**：**matplotlib 3.10.0（Anaconda 已装，事实包 §3.7）**，走 TkAgg 后端；不再引入 PySide6（6.11 DLL 加载失败已放弃，事实包 §3.7）。
+- **运行环境**：**Anaconda Python 3.13.5**（`C:\Users\wumu2\anaconda3\python.exe`）；依赖全自带，**无需补装**；⚠️ 勿用 conda 命令。
+- **数据流**：A8-01 comm 收到频谱帧 → 解析 32 整数 → 入队（线程安全）→ tkinter `after()` 定时取队绘制。
 - **待定（需人确认）**：Y 轴归一化方式、颜色方案、是否叠加波形与柱状双视图。
 
 ## 2. 执行路线图（5 阶段）
@@ -41,7 +41,7 @@
 - **读什么**：`A8-01` 文档（comm 接口）、`A2-04` 文档（串口输出格式）、父 `FEAT-A8`
 - [ ] 步骤1：确认 A8-01 已通过（comm 可收发）
 - [ ] 步骤2：确认板端 A2-04 已在跑（SSCOM 可见 32 整数行）
-- [ ] 步骤3：确认 Python 环境（PySide6、绘图库待定需人确认）
+- [ ] 步骤3：确认 Python 环境（matplotlib + tkinter 可用，`python -c "import matplotlib; import tkinter"`）
 - **判定标准**：A8-01/A2-04 状态已核实、环境已确认
 - **⏸️ 停等：人确认后进入阶段 2**
 
@@ -55,7 +55,7 @@
 
 ### 🟠 阶段 3：实现（角色：Dev Agent）
 - **阶段目标**：写 GUI 模块，本地运行自测
-- [ ] 步骤1：搭建 PySide6 主窗口 + 绘图组件（绘图库按阶段2定稿）
+- [ ] 步骤1：搭建 tkinter 主窗口 + matplotlib 绘图组件（`FigureCanvasTkAgg`）
 - [ ] 步骤2：实现 comm 数据接入（队列 + 解析 32 整数）
 - [ ] 步骤3：`python -m py_compile` 语法检查 + 本地伪造数据流自测（AC-03）
 - **判定标准**：语法通过、本地自测窗口能画出变化的柱状图
@@ -86,14 +86,13 @@
 
 ### 3.0 物品/工具清单（动手前先打勾，缺一不可）
 - [ ] PC（Windows）+ **Anaconda Python 3.13.5**（`C:\Users\wumu2\anaconda3\python.exe`，事实包 §3.7）
-- [ ] PySide6 已安装（`& C:\Users\wumu2\anaconda3\python.exe -m pip install PySide6`；`-m pip show PySide6` 确认）
-- [ ] matplotlib 已装（`python.exe -c "import matplotlib; print(matplotlib.__version__)"`，期望 3.10.0）
+- [ ] matplotlib + tkinter 可用（`python -c "import matplotlib, tkinter"`；两者 Anaconda 自带，**无需补装**）
 - [ ] A8-01 通信层已通过
 - [ ] 核心板（A2-04 频谱输出在跑，SSCOM 可见 32 整数行）
 - [ ] 5V 电源（非快充）+ USB-TTL
 
 ### 3.1 环境确认（阶段 1 执行）
-1. `& C:\Users\wumu2\anaconda3\python.exe -m pip show PySide6` → 记录版本：___（无 → 先 `-m pip install PySide6`）
+1. `& C:\Users\wumu2\anaconda3\python.exe -c "import matplotlib, tkinter; print('GUI deps OK')"` → 期望 `GUI deps OK`（记录：___）
 2. `& C:\Users\wumu2\anaconda3\python.exe -c "import matplotlib; print(matplotlib.__version__)"` → 记录：___（期望 3.10.0）
 3. SSCOM 打开板端调试口，确认每 ~200ms 出现一行 32 个整数。记录样本行：__________
 

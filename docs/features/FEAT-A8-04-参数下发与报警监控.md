@@ -25,21 +25,21 @@
 |------|----------|
 | 范围内（可改） | 上位机 `gui/` 参数面板 + 报警处理模块（弹窗/日志） |
 | 超出范围（禁止碰） | `firmware/Drivers/` HAL；板端 A4-04/A6 实现（本 FEAT 只做 PC 端下发与接收） |
-| 外部依赖 | A8-01 通信层、A4-04 参数协议（帧格式待定需人确认）、A6 报警事件输出、**PySide6（需补装）** |
+| 外部依赖 | A8-01 通信层、A4-04 参数协议（帧格式待定需人确认）、A6 报警事件输出、**matplotlib + tkinter（Anaconda 自带，零安装）** |
 
 ### 1.4 关键参数与接口（事实包 §3 + 父 FEAT-A8，禁止自造）
 - **下发参数**：检测阈值、帧数（A4-04 约定；基线 30/60 帧，事实包 A4-03；**具体参数 ID/范围待定需人确认**）。
 - **协议**：经 A8-01 comm 按 A5-02 帧协议下发（帧格式待定需人确认）。
 - **报警事件**：板端 A6 输出（异常标志/事件帧，格式**待定需人确认**）。
-- **UI**：参数输入面板 + 报警弹窗（消息框）+ 日志文件（路径待定需人确认）。
-- **运行环境**：**Anaconda Python 3.13.5**（`C:\Users\wumu2\anaconda3\python.exe`）；需补装 **PySide6**（`-m pip install PySide6`）；⚠️ 勿用 conda 命令。
+- **UI**：**tkinter 参数输入面板 + 报警弹窗（`messagebox`）+ 日志文件**（路径待定需人确认）；不再引入 PySide6（6.11 DLL 加载失败已放弃，事实包 §3.7）。
+- **运行环境**：**Anaconda Python 3.13.5**（`C:\Users\wumu2\anaconda3\python.exe`）；依赖全自带，**无需补装**；⚠️ 勿用 conda 命令。
 - **待定（需人确认）**：参数 ID 映射、范围校验规则、报警事件帧格式、日志文件路径/滚动策略。
 
 ## 2. 执行路线图（5 阶段）
 
 ### 🟢 阶段 1：准备（角色：Dev Agent）
 - **读什么**：`A8-01` 文档（comm 接口）、`A4-04` 文档（参数下发协议）、`A6` 文档（报警输出）、父 `FEAT-A8`
-- [ ] 步骤1：确认 A8-01 已通过（comm 可收发）
+- [ ] 步骤1：确认 GUI 环境（matplotlib + tkinter 可用，`python -c "import matplotlib, tkinter"`）
 - [ ] 步骤2：确认 A4-04 参数协议定稿（参数 ID/帧格式，待定需人确认）
 - [ ] 步骤3：确认 A6 报警事件输出格式（待定需人确认）
 - **判定标准**：依赖状态已核实、协议/格式已明确（或标注待定）
@@ -86,13 +86,13 @@
 
 ### 3.0 物品/工具清单（动手前先打勾，缺一不可）
 - [ ] PC（Windows）+ **Anaconda Python 3.13.5**（`C:\Users\wumu2\anaconda3\python.exe`，事实包 §3.7）
-- [ ] PySide6 已安装（`& C:\Users\wumu2\anaconda3\python.exe -m pip install PySide6`；`-m pip show PySide6` 确认）
+- [ ] matplotlib + tkinter 可用（`python -c "import matplotlib, tkinter"`；Anaconda 自带，**无需补装**）
 - [ ] A8-01 通信层已通过
 - [ ] 核心板（A4-04/A6 已在跑，报警可触发）
 - [ ] 5V 电源（非快充）+ USB-TTL
 
 ### 3.1 环境确认（阶段 1 执行）
-1. `& C:\Users\wumu2\anaconda3\python.exe -m pip show PySide6` → 记录版本：___（无 → 先 `-m pip install PySide6`）
+1. `& C:\Users\wumu2\anaconda3\python.exe -c "import matplotlib, tkinter; print('GUI deps OK')"` → 期望 `GUI deps OK`（记录：___）
 2. 确认 A4-04 参数协议（参数 ID/范围/帧格式，记录：___，待定需人确认）
 
 ### 3.2 参数下发测试（阶段 4 执行）
