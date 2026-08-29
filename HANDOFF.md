@@ -196,11 +196,12 @@ I2S DMA started! waiting data...
 
 ## 七、当前阻塞点和待办
 
-> **2026-08-28 更新：无阻塞。A1 全线收官（01🟡/02🟢/03🟢/04🟢），进入 A2。** ~~阻塞点（唯一）：INMP441 麦克风损坏，需换新麦克风。~~ ← 已解决（8/28 新麦验证通过，吹气 max 冲满量程）。原"换麦克风后待办"1/2/3 已全部完成（A1-02 ✅ / A1-03 ✅ / A1-04 ✅）。
+> **2026-08-30 更新：无阻塞。A2 全线收官（父🟢 + 01/02/03/04 四子全 🟢），进入 A3（MFCC 特征提取）。** A2 主线成果：麦克风 → I2S DMA → FreeRTOS 队列 → 256 点 FFT 32 频带 → OLED 柱状图 + 串口 BANDS 行双输出全通；期间闭环 8 个 bug（详见 docs/bugs/ 与 lessons_summary.md），沉淀 R28 规则与 `.skills/oocd_probe.ps1` 非侵入探针。~~A1 全线收官（2026-08-28）。~~ ~~阻塞点（唯一）：INMP441 麦克风损坏~~ ← 已解决（8/28 新麦验证通过）。
 
 **当前待办（按顺序）**：
-1. ~~A1-04 SCK 时钟核实~~ → **已完成（2026-08-28）**：Saleae Logic 1.2.17 实测（24MHz/1s）WS=16kHz 精确命中、SCK≈1MHz（±4% 分辨率，真值含 1.024MHz）、比值 64 自洽 → Fs=16000Hz 无误，README"2 倍疑点"证伪关闭。工具备忘：zave 24M/8ch + Saleae Logic 1.2.17（`C:\Program Files\Saleae Inc\`，资料在 `桌面\stm32F407ZGT6\逻辑分析仪\`）
-2. A1-01 补录 C3/C4（电压数值、轻敲 PCB，可选，不阻塞）
-3. **进入 A2 阶段**：FFT + 频谱分析（A2-01 CMSIS-DSP 集成、A2-02 FFT 幅度谱；注意 A2-02/03 文档中"低 16 位"表述需按 v10 术语"步进 4 取 word[4k]"理解；A2 开工前顺手修 max 负峰溢出改 int32）
-4. 补齐剩余外设（OLED、SHT30、RS485、LED PWM 等，pin_config.h 已预留引脚）
-5. RS485 回环自测失败排查（st=3，代码已 `#if 0` 封存，归 A5-01）
+1. ~~A1-04 SCK 时钟核实~~ → **已完成（2026-08-28）**：Saleae Logic 1.2.17 实测 WS=16kHz 精确命中、SCK≈1MHz（真值 1.024MHz）→ Fs=16000Hz 无误，README"2 倍疑点"证伪关闭。工具备忘：zave 24M/8ch + Saleae Logic 1.2.17（`C:\Program Files\Saleae Inc\`，资料在 `桌面\stm32F407ZGT6\逻辑分析仪\`）
+2. ~~进入 A2 阶段~~ → **已完成（2026-08-30 全线收官）**：A2-01 CMSIS-DSP 🟢 / A2-02 FFT 幅度谱（实麦 1kHz→bin=16 零漂移）🟢 / A2-03 OLED 柱状图（12 AC 全绿）🟢 / A2-04 串口 BANDS 行（12 AC 全绿）🟢
+3. **进入 A3 阶段**：MFCC 特征提取（A3-01 预加重分帧 / A3-02 Mel 滤波器组 / A3-03 Log+DCT / A3-04 特征向量验证；输入接口已就绪——spec_process 32 频带 + getter；fft_run 不可重入，新增消费方须串行化；A3 大量出现均值/差分等可能为负的中间量，编码前先读 lessons_summary unsigned 除法陷阱条目）
+4. A1-01 补录 C3/C4（电压数值、轻敲 PCB，可选，不阻塞）
+5. 补齐剩余外设（SHT30、RS485、LED PWM 等，pin_config.h 已预留引脚；OLED 已于 A2-03 完成）
+6. RS485 回环自测失败排查（st=3，代码已 `#if 0` 封存，归 A5-01）
