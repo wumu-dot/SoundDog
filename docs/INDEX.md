@@ -54,6 +54,7 @@
 | `bugs/BUG-20260829-004-*.md` | 改掉 boot 契约字符串 I2S DMA started 前缀（P1） |
 | `bugs/BUG-20260829-005-*.md` | OLED 手拼 I2C 控制字节帧违反手册，静默乱码（P1） |
 | `bugs/BUG-20260829-006-*.md` | 调度器前 xQueueCreate 残留 BASEPRI→SysTick 灭→HAL_Delay 死循环（P0，OLED 黑屏真根因） |
+| `bugs/BUG-20260830-001-*.md` | gdb detach 遗留停机态被误诊为固件挂死（P0 流程事故；沉淀 oocd_probe.ps1 非侵入探针） |
 | `../firmware/flash_isp.bat` | ISP 串口救砖烧录（BOOT0 + USART1） |
 | `../firmware/check_doc.bat` | DOC-STATE 漂移检测（双击运行） |
 | `../firmware/check_doc_fix.bat` | DOC-STATE 漂移自动修复（双击运行） |

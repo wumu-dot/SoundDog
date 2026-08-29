@@ -28,6 +28,7 @@
 #include "audio_pipe.h"        /* A2-02: frame_msg_t + audio_queue_get() */
 #include "spectrum.h"        /* A2-02: spec_process + 峰值/噪声底 getter */
 #include "oled_drv.h"        /* A2-03: OLED_DrawSpectrum + 错误计数 */
+#include "usart.h"           /* A2-04: huart1（BANDS 行直接 Transmit） */
 #include <string.h>
 #include <stdio.h>
 /* USER CODE END Includes */
@@ -180,6 +181,8 @@ static void SpecTask(void *argument)
   static frame_msg_t msg;
   static int16_t     pcm256[SPEC_WINDOW];
   static uint32_t    bands[SPEC_BANDS];
+  static char        bands_line[256];   /* A2-04 BANDS 行缓冲（静态，~224B 最长） */
+  TickType_t         t_bands_last = 0u; /* A2-04 节流基准（tick 差值门控） */
 
   if (q == NULL) {
     printf("specTask: audio queue NULL, halt\r\n");
@@ -222,6 +225,31 @@ static void SpecTask(void *argument)
 
     /* A2-03: 更新显示快照（写侧临界区，~µs 级；displayTask 5Hz 读） */
     spec_display_update(bands);
+
+    /* A2-04: BANDS 行（一行 32 个 ×100 整数，逗号分隔，~200ms 节流）。
+     * 格式对齐 Serial Studio/传感器遥测惯例 + PC 端 A8-02 解析约定
+     * （BANDS 前缀过滤数据行）。节流用 tick 差值（非窗口计数），丢窗
+     * 不影响节拍。32 整数最长 ~224B → 静态缓冲（约定：大数组静态分配，
+     * printf 格式化吃栈——ST 社区 hardfault 头号原因，故不放大栈上）。
+     * 一次 snprintf + 一次整帧 Transmit（CSV 单帧惯例），~17ms 阻塞
+     * < 队列深度 4 帧×8ms=32ms，不丢音频帧。 */
+    TickType_t now = xTaskGetTickCount();
+    if ((now - t_bands_last) >= pdMS_TO_TICKS(200u)) {
+      t_bands_last = now;
+      int32_t len = snprintf(bands_line, sizeof(bands_line), "BANDS ");
+      for (uint32_t b = 0u; (b < SPEC_BANDS) && (len > 0); b++) {
+        len += snprintf(&bands_line[len], sizeof(bands_line) - (size_t)len,
+                        (b == 0u) ? "%lu" : ",%lu",
+                        (unsigned long)bands[b]);
+        if (len >= (int32_t)sizeof(bands_line)) { break; }  /* 截断保护 */
+      }
+      if (len > 0) {
+        (void)snprintf(&bands_line[len], sizeof(bands_line) - (size_t)len,
+                       "\r\n");
+        (void)HAL_UART_Transmit(&huart1, (uint8_t *)bands_line,
+                                (uint16_t)strlen(bands_line), 100u);
+      }
+    }
 
     /* 16ms/窗 × 32 ≈ 0.5s 打印一次，避免串口刷屏
      * AC-01 证据行：peak_bin 期望 ∈ [15,17]（1kHz/62.5Hz=16） */
