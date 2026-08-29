@@ -10,7 +10,7 @@
 - **父FEAT**：FEAT-A2-FFT频谱可视化
 - **优先级**：P0
 - **预估总耗时**：2h
-- **当前状态**：🔴未开始（傻瓜式操作单已备好，依赖 A1 通过后开跑）
+- **当前状态**：🟢已完成（2026-08-29 阶段5 Review 通过：FFT 自测 bin=16/mag=64 精确命中，A1 回归无异常）
 
 ## 1. 总体目标与硬边界
 
@@ -124,42 +124,54 @@
 ## 4. 验收标准（12 条）
 
 ### 功能验收
-- [ ] AC-01 `arm_rfft_fast_f32` 示例 FFT 运行：编译链接成功、串口输出无 NaN/Inf/溢出（记录输出样本）
-- [ ] AC-02 向后兼容：A1 采集链路回归——boot 三行依次出现 + 吹气 max 明显变化（记录读数）
+- [x] AC-01 `arm_rfft_fast_f32` 示例 FFT 运行：编译链接成功、串口输出无 NaN/Inf/溢出（实测：`FFT selftest: peak bin=16 (1000 Hz) mag=640/10 DC=0/10`——峰值 bin 精确命中理论值 16，幅度 64.0 = 256×0.5÷2，DC=0）
+- [x] AC-02 向后兼容：A1 采集链路回归——boot 三行依次出现 + 吹气 max 明显变化（实测 2026-08-29 01:35：安静 223~2616，吹气 29701~32767）
 
 ### 代码质量
-- [ ] AC-03 编译/Lint 通过：`firmware\build.bat` 无错误退出
-- [ ] AC-04 无新增警告（记录编译警告数：___）
-- [ ] AC-05 文档已更新：本 FEAT「维护与调试」回填 + 父 FEAT 项目表该行状态更新
+- [x] AC-03 编译/Lint 通过：`build.bat` 无错误退出（text=152564 data=108 bss=81072）
+- [x] AC-04 无新增警告（0 警告；%f→整数化打印后比浮点版省 880 字节）
+- [x] AC-05 文档已更新：本 FEAT「维护与调试」回填 + 父 FEAT 项目表该行状态更新
 
 ### 安全红线
-- [ ] AC-06 无硬编码密钥：**N/A**（嵌入式工程无密钥/凭据，代码内无任何账号/密钥字符串）
-- [ ] AC-07 错误处理完善：链接失败/库缺失时，报错可直接定位到 Makefile 相应行（记录一次失败定位过程或说明）
-- [ ] AC-08 用户输入已校验：**N/A**（本 FEAT 无用户输入接口；示例信号为代码内合成 1kHz 正弦）
+- [x] AC-06 无硬编码密钥：**N/A**（嵌入式工程无密钥/凭据，代码内无任何账号/密钥字符串）
+- [x] AC-07 错误处理完善：链接失败/库缺失时，报错可直接定位到 Makefile 相应行（实测两次链接失败均由 ld 报错行号直接定位：漏加 `arm_cfft_radix8_f32.c` → `arm_radix8_butterfly_f32` 未定义；漏加 `arm_bitreversal2.c` → `arm_bitreversal_32` 未定义，补 C_SOURCES 后通过）
+- [x] AC-08 用户输入已校验：**N/A**（本 FEAT 无用户输入接口；示例信号为代码内合成 1kHz 正弦）
 
 ### 测试与边界
-- [ ] AC-09 新增测试自动运行：1kHz 正弦示例随 `build.bat` 产物可重复运行（对应 AC-01）
-- [ ] AC-10 全部回归测试通过：A1 链路回归（AC-02 证据）+ 示例 FFT 输出正确
-- [ ] AC-11 测试覆盖率 ≥ 80%：**N/A**（嵌入式示例验证，无覆盖率工具链；以 AC-01 实测输出代替）
-- [ ] AC-12 按 FEAT 模板执行：5 阶段停等、日志追加不删除、状态回填均按 `.sop-agent规格.md` 执行
+- [x] AC-09 新增测试自动运行：1kHz 正弦示例随 `build.bat` 产物可重复运行（对应 AC-01）
+- [x] AC-10 全部回归测试通过：A1 链路回归（AC-02 证据）+ 示例 FFT 输出正确
+- [x] AC-11 测试覆盖率 ≥ 80%：**N/A**（嵌入式示例验证，无覆盖率工具链；以 AC-01 实测输出代替）
+- [x] AC-12 按 FEAT 模板执行：5 阶段停等、日志追加不删除、状态回填均按 `.sop-agent规格.md` 执行
 
 ## 5. 维护与调试（阶段5通过后回填）
 
 ### 5.1 影响文件
 | 文件 | 改动类型 | 说明 |
 |------|---------|------|
-| `firmware/soundDog/Makefile` | 修改 | 加 DSP 库/源、确认 FPU 参数 |
-| `firmware/soundDog/Src/dsp/fft.c` | 新增 | FFT 封装 + 1kHz 正弦示例 |
+| `firmware/soundDog/Makefile` | 修改 | C_SOURCES +15（fft.c + 14 个 DSP 源）、C_DEFS +ARM_MATH_CM4F/__FPU_PRESENT、C_INCLUDES +dsp 头路径；链接段/FPU 零改动 |
+| `firmware/soundDog/Inc/dsp/fft.h` | 新增 | FFT 封装接口（FFT_LEN=256、FFT_BINS=128、FFT_BIN_HZ=62.5） |
+| `firmware/soundDog/Src/dsp/fft.c` | 新增 | fft_init/fft_run 实现（rfft_fast + cmplx_mag） |
+| `firmware/soundDog/Src/main.c` | 修改 | fft_selftest()：1kHz 正弦自测（USER CODE 区，A2-02 时换成真音频） |
+| `firmware/cmsis-dsp/repo/` | 新增 | 官方 CMSIS-DSP v1.14.4 vendored（git clone 后精简：仅 Include + 8 个 Source 子集） |
 
 ### 5.2 调试要点
-- 链接错误 → 检查 Makefile 路径与库名（§3.4）
+- 链接错误 `arm_* undefined` → C_SOURCES 漏源文件（本次踩过两个：arm_cfft_radix8_f32.c、arm_bitreversal2.c；rfft_fast 依赖链见 Makefile L82-L95 清单）
 - 数值异常（NaN） → 检查 FPU 使能与 FFT 初始化
+- **printf %f 打印空** → newlib-nano（-specs=nano.specs）默认无浮点格式化；**本项目约定整数化打印**（×10 显示），不加 `-u _printf_float`（省 ~10KB）
+- GitHub zip 下载遇 502 → 改用 `git clone --depth 1 --branch v1.14.4`（已验证可行）
+- CMSIS-DSP 体积：text +130KB（1MB flash 占 15%，A3/A4 还有充足余量）
 
 ### 5.3 测试入口
 - `firmware\build.bat` 编译 + 烧录后 SSCOM 观察示例 FFT 输出（对应 AC-01）；A1 回归同 §3.3（对应 AC-02）
+- 期望输出：`FFT selftest: peak bin=16 (1000 Hz) mag=640/10 DC=0/10`
 
 ## 6. 执行日志
 
 | 时间 | 阶段 | 角色 | 摘要 | 遇阻 |
 |------|------|------|------|------|
-| | | | | |
+| 2026-08-29 01:0x | 阶段1 准备 | Dev | 依赖 A1 🟢 确认；CLT 全树检索无 CMSIS-DSP（操作单"CLT 自带"假设不成立）；Makefile FPU 参数已配；输出影响范围 | 库来源需另选 |
+| 2026-08-29 01:1x | 阶段2 设计 | Dev | 定方案 A vendored 直编源；fft_init/fft_run API（256 点→128 bins）；操作单 §3 修订（来源/判据量化/A1 回归 v10 基准） | — |
+| 2026-08-29 01:2x | 阶段3 实现 | Dev | git clone v1.14.4 精简至 10.4MB；建 dsp/ 写 fft.c/h；Makefile 三段追加；两轮链接失败（radix8/bitreversal2 漏加）修复后编译通过（text=153444） | zip 下载 502→改 git clone；2 次链接缺源 |
+| 2026-08-29 01:32 | 阶段4 测试 | Test | 上板：bin=16 ✅ 但 mag/DC 打印空（nano.specs 无 %f）；A1 回归正常 | %f 打印 bug |
+| 2026-08-29 01:35 | 阶段4 复测 | Test | 整数化打印修复后：peak bin=16 (1000 Hz) mag=640/10 DC=0/10 全命中；A1 回归安静 223~2616/吹气 29701~32767 | — |
+| 2026-08-29 01:4x | 阶段5 审查 | Review | 12 条 AC 逐条过（AC-01/02/07 有实测证据，06/08/11 N/A）；回填父表/INDEX/维护地图 | — |

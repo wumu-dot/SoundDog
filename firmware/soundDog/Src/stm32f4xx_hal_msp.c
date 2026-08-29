@@ -65,10 +65,13 @@ void HAL_MspInit(void)
 
   /* USER CODE BEGIN MspInit 0 */
 
-  /* 释放 JTAG 引脚，保留 SWD（PB3=JTDO/PB5=JTDI 需释放后作 I2S3_CK/SD）
-   * SWJ_CFG 在 SYSCFG_MEMRMP bit[2:1] = 0b10 表示 "关闭 JTAG，保留 SWD" */
-  __HAL_RCC_SYSCFG_CLK_ENABLE();
-  SYSCFG->MEMRMP = (SYSCFG->MEMRMP & ~0x6UL) | (0x2UL << 1);
+  /* STM32F4 注：无需"释放 JTAG"操作。
+   * STM32F1 才有 SWJ_CFG 字段（在 AFIO_MAPR）；STM32F4 的 SYSCFG_MEMRMP 只有 MEM_MODE 字段
+   * (CMSIS 头 stm32f407xx.h:11629-11633 定义 SYSCFG_MEMRMP_MEM_MODE_Msk=0x3，bit[1:0])。
+   * PB3/PB5 复位后默认 MODER=0b00（模拟），HAL_GPIO_Init 配 AF6_SPI3 后直接是 I2S3_CK/SD。
+   * 历史代码误用 SYSCFG->MEMRMP bit[2:1] 操作 SWJ_CFG 是 STM32F1 拷贝残留，已清理。
+   * 详见 docs/summary/lessons_summary.md（若已记录）。
+   */
 
   /* USER CODE END MspInit 0 */
 

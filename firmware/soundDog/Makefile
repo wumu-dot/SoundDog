@@ -36,13 +36,14 @@ BUILD_DIR = build
 ######################################
 # C sources
 C_SOURCES =  \
-Src/main.c \
+App/main.c \
 Src/gpio.c \
-Src/freertos.c \
+App/freertos.c \
 Src/dma.c \
 Src/i2s.c \
-Src/i2s_drv.c \
+BSP/i2s_drv.c \
 Src/usart.c \
+BSP/rs485_drv.c \
 Src/stm32f4xx_it.c \
 Src/stm32f4xx_hal_msp.c \
 Src/stm32f4xx_hal_timebase_tim.c \
@@ -76,7 +77,28 @@ Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2/cmsis_os2.c \
 Middlewares/Third_Party/FreeRTOS/Source/portable/MemMang/heap_4.c \
 Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F/port.c \
 Src/sysmem.c \
-Src/syscalls.c
+Src/syscalls.c \
+BSP/fft.c \
+BSP/spectrum.c \
+Src/i2c.c \
+BSP/oled_drv.c \
+Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_i2c.c \
+Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_i2c_ex.c \
+../cmsis-dsp/repo/Source/TransformFunctions/arm_rfft_fast_f32.c \
+../cmsis-dsp/repo/Source/TransformFunctions/arm_rfft_fast_init_f32.c \
+../cmsis-dsp/repo/Source/TransformFunctions/arm_cfft_f32.c \
+../cmsis-dsp/repo/Source/TransformFunctions/arm_cfft_radix8_f32.c \
+../cmsis-dsp/repo/Source/TransformFunctions/arm_cfft_init_f32.c \
+../cmsis-dsp/repo/Source/TransformFunctions/arm_bitreversal2.c \
+../cmsis-dsp/repo/Source/CommonTables/arm_common_tables.c \
+../cmsis-dsp/repo/Source/CommonTables/arm_const_structs.c \
+../cmsis-dsp/repo/Source/ComplexMathFunctions/arm_cmplx_mag_f32.c \
+../cmsis-dsp/repo/Source/FastMathFunctions/arm_sin_f32.c \
+../cmsis-dsp/repo/Source/FastMathFunctions/arm_cos_f32.c \
+../cmsis-dsp/repo/Source/BasicMathFunctions/arm_mult_f32.c \
+../cmsis-dsp/repo/Source/BasicMathFunctions/arm_scale_f32.c \
+../cmsis-dsp/repo/Source/SupportFunctions/arm_copy_f32.c \
+../cmsis-dsp/repo/Source/SupportFunctions/arm_fill_f32.c
 
 # ASM sources
 ASM_SOURCES =  \
@@ -131,12 +153,16 @@ AS_DEFS =
 # C defines
 C_DEFS =  \
 -DUSE_HAL_DRIVER \
--DSTM32F407xx
+-DSTM32F407xx \
+-DARM_MATH_CM4F \
+-D__FPU_PRESENT=1
 
 
 # AS includes
 AS_INCLUDES =  \
 -IInc \
+-IApp \
+-IBSP \
 -IDrivers/STM32F4xx_HAL_Driver/Inc \
 -IDrivers/STM32F4xx_HAL_Driver/Inc/Legacy \
 -IMiddlewares/Third_Party/FreeRTOS/Source/include \
@@ -148,13 +174,16 @@ AS_INCLUDES =  \
 # C includes
 C_INCLUDES =  \
 -IInc \
+-IApp \
+-IBSP \
 -IDrivers/STM32F4xx_HAL_Driver/Inc \
 -IDrivers/STM32F4xx_HAL_Driver/Inc/Legacy \
 -IMiddlewares/Third_Party/FreeRTOS/Source/include \
 -IMiddlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2 \
 -IMiddlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F \
 -IDrivers/CMSIS/Device/ST/STM32F4xx/Include \
--IDrivers/CMSIS/Include
+-IDrivers/CMSIS/Include \
+-I../cmsis-dsp/repo/Include
 
 
 # compile gcc flags
@@ -224,9 +253,14 @@ $(BUILD_DIR):
 #######################################
 # clean up
 #######################################
+ifeq ($(OS),Windows_NT)
+clean:
+	-if exist $(BUILD_DIR) rmdir /s /q $(BUILD_DIR)
+else
 clean:
 	-rm -fR $(BUILD_DIR)
-  
+endif
+
 #######################################
 # dependencies
 #######################################

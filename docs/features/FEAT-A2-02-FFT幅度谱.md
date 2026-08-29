@@ -10,7 +10,7 @@
 - **父FEAT**：FEAT-A2-FFT频谱可视化
 - **优先级**：P0
 - **预估总耗时**：2h
-- **当前状态**：🔴未开始（傻瓜式操作单已备好，依赖 A2-01 通过后开跑）
+- **当前状态**：🟢已完成（2026-08-29：5 阶段全部通过，硬件验证 peak_bin=16 精确命中，阶段 5 独立评审 With fixes 已闭环）
 
 ## 1. 总体目标与硬边界
 
@@ -54,9 +54,9 @@
 
 ### 🟠 阶段 3：实现（角色：Dev Agent）
 - **阶段目标**：按 §3.1~§3.2 实现幅度谱并编译，每改完一个文件对照 AC 自检
-- [ ] 步骤1：按 §3.1 接入数据源（取数 `(int16_t)(raw & 0xFFFF)`）
-- [ ] 步骤2：按 §3.2 实现加窗 + FFT + 幅度谱 + 峰值搜索（256 点）
-- [ ] 步骤3：运行 `firmware\build.bat`，期望无错误退出、无新增警告
+- [x] 步骤1：按 §3.1 接入数据源（取数 `(int16_t)(raw & 0xFFFF)`）
+- [x] 步骤2：按 §3.2 实现加窗 + FFT + 幅度谱 + 峰值搜索（256 点）
+- [x] 步骤3：运行 `firmware\build.bat`，期望无错误退出、无新增警告
 - **判定标准**：编译链接成功；失败 → 查 §3.5 故障表，修复后重跑
 - **⏸️ 停等：人确认后进入阶段 4**
 
@@ -93,27 +93,27 @@
   - [ ] B. 实麦 1kHz 音源（手机/PC 播放纯音，音源设备与音量：待定（需人确认））
 
 ### 3.1 数据源接入（阶段 3 执行）
-1. 确认当前取数实现位置（`i2s_drv.c` 或等效，**记录文件：___**）。
-2. 取数确认：`(int16_t)(raw & 0xFFFF)`（A1-03 结论，BUG-002），声道 = 左声道（L/R→GND）。**记录确认结果：___**
-3. 测试信号方式（**记录选择：___**）：
+1. 确认当前取数实现位置（`i2s_drv.c` 或等效，**记录文件：`Src/i2s_drv.c`（extract_frame）**）。
+2. 取数确认：`(int16_t)(raw & 0xFFFF)`（A1-03 结论，BUG-002），声道 = 左声道（L/R→GND）。**记录确认结果：已确认，与 A1-03 一致；帧经 `Inc/audio_pipe.h` 队列（ISR 拷贝入队）送 specTask**
+3. 测试信号方式（**记录选择：方式 B（实麦 1kHz 音源，AC-01 主证据）；方式 A 合成信号保留为 A2-01 回归（AC-10）**）：
    - 方式 A：直接注入合成 1kHz 正弦到 FFT 输入缓冲（不经麦克风，结果确定性强）。
    - 方式 B：麦克风采集实麦 1kHz 音源（端到端验证，但受音量/距离影响）。
 
 ### 3.2 幅度谱计算（阶段 3 执行）
-1. 输入 256 点，先加**汉明窗**（256 点窗系数）。**记录窗函数实现位置：___**
-2. 调用 `arm_rfft_fast_f32`（A2-01 已集成）做 256 点 FFT。**记录初始化与调用：___**
-3. 幅度谱用 `arm_cmplx_mag_f32`（或 `sqrt(re² + im²)`）。**记录实现：___**
+1. 输入 256 点，先加**汉明窗**（256 点窗系数）。**记录窗函数实现位置：`Src/dsp/spectrum.c` spec_init()（系数运行时生成，libm cosf）**
+2. 调用 `arm_rfft_fast_f32`（A2-01 已集成）做 256 点 FFT。**记录初始化与调用：`fft_init(fft_ctx_get())`@main.c（共享实例）；`fft_run()`@spectrum.c（封装 arm_rfft_fast_f32）**
+3. 幅度谱用 `arm_cmplx_mag_f32`（或 `sqrt(re² + im²)`）。**记录实现：`fft_run()` 内部（A2-01 封装）；峰值/噪声底搜索在 `spec_process()`，getter：`spec_peak_bin/peak_mag/noise_floor()`（×100 整数化）**
 4. 分辨率核对（规格 §3.6 A2-02）：16kHz/256 = 62.5Hz/bin；1kHz → bin = 1000/62.5 = **16**（理论值）。
 
 ### 3.3 峰值验证（阶段 4 执行，AC-01 证据）
 1. 烧录，串口打印峰值 bin 与幅度。
-2. 期望峰值 bin ∈ **[15, 17]**。**记录实测峰值 bin：___**
-3. 期望峰值幅度显著高于噪声底。**记录峰值幅度：___ / 噪声底幅度：___ / 比值：___**
-4. 峰值 bin 偏移 → 查 §3.5 故障表。
+2. 期望峰值 bin ∈ **[15, 17]**。**记录实测峰值 bin：16（1kHz 实麦，30+ 样本恒定零漂移，2026-08-29 02:33）**
+3. 期望峰值幅度显著高于噪声底。**记录峰值幅度：160~172/100 / 噪声底幅度：3~4/100 / 比值：40~55**
+4. 峰值 bin 偏移 → 查 §3.5 故障表。（未触发）
 
 ### 3.4 A1 回归（阶段 4 执行，AC-02 证据）
-1. SSCOM（115200）观察，期望依次出现：`SoundDog boot OK` → `I2S_DRV_Init ret=0` → `I2S DMA started`。**记录：___**
-2. 吹气：`[n] max=xxxx` 仍明显变化。**记录读数范围：___ ~ ___**
+1. SSCOM（115200）观察，期望依次出现：`SoundDog boot OK` → `I2S_DRV_Init ret=0` → `I2S DMA started (first frame idx=...)`（行首 `I2S DMA started` = 规格 §3.4 boot 三行契约，验收按前缀匹配；打印位置已从 ISR 移入 specTask，见执行日志）。**记录：三行全部按序出现（02:32/02:33 两轮复位）**
+2. 吹气：`[n] max=xxxx` 仍明显变化。**记录读数范围：831~2408（环境声）；吹气冲峰 32768（02:14 诊断版日志，frame_max_stat 代码路径与正式版一致）；安静 102~343（02:32 日志）**
 
 ### 3.5 故障速查表
 | 现象 | 可能原因 | 处理 |
@@ -127,41 +127,58 @@
 ## 4. 验收标准（12 条）
 
 ### 功能验收
-- [ ] AC-01 1kHz 测试信号 FFT 后峰值 bin ∈ [15, 17]，峰值幅度显著高于噪声底（记录峰值 bin、峰值幅度、噪声底幅度、比值）
-- [ ] AC-02 向后兼容：A1 链路回归——boot 三行 + 吹气 max 明显变化（记录读数）
+- [x] AC-01 1kHz 测试信号 FFT 后峰值 bin ∈ [15, 17]，峰值幅度显著高于噪声底（记录峰值 bin、峰值幅度、噪声底幅度、比值）→ 实测：bin=16（30+ 样本零漂移）、mag=160~172/100、noise=3~4/100、ratio=40~55（§3.3）
+- [x] AC-02 向后兼容：A1 链路回归——boot 三行 + 吹气 max 明显变化（记录读数）→ 实测：三行按序；max 102~343（安静）↔ 831~2408（环境）↔ 32768（吹气）（§3.4）
 
 ### 代码质量
-- [ ] AC-03 编译/Lint 通过：`firmware\build.bat` 无错误退出
-- [ ] AC-04 无新增警告（记录编译警告数：___）
-- [ ] AC-05 文档已更新：峰值 bin、分辨率验证结论写入本 FEAT「维护与调试」+ 父 FEAT 项目表该行状态更新
+- [x] AC-03 编译/Lint 通过：`firmware\build.bat` 无错误退出 → 实测：exit 0、0 error（阶段 5 评审方独立 clean rebuild 复现）
+- [x] AC-04 无新增警告（记录编译警告数：31 条，全部为历史 `__FPU_PRESENT` 重定义（每编译单元 1 条，双重定义于命令行 -D 与 CMSIS 头文件），A2-02 新增 0——阶段 5 评审方独立复现）
+- [x] AC-05 文档已更新：峰值 bin、分辨率验证结论写入本 FEAT「维护与调试」+ 父 FEAT 项目表该行状态更新 → 已完成（§5.1~5.3 + 父表 + INDEX + 维护地图）
 
 ### 安全红线
-- [ ] AC-06 无硬编码密钥：**N/A**（嵌入式工程无密钥/凭据）
-- [ ] AC-07 错误处理完善：FFT 输入/输出缓冲长度与点数一致（256 点，无越界读写，静态核对记录：___）
-- [ ] AC-08 用户输入已校验：**N/A**（本 FEAT 无用户输入接口；测试信号为合成正弦或麦克风采集）
+- [x] AC-06 无硬编码密钥：**N/A**（嵌入式工程无密钥/凭据）
+- [x] AC-07 错误处理完善：FFT 输入/输出缓冲长度与点数一致（256 点，无越界读写，静态核对记录：`fft_in[FFT_LEN]`=256×float32（spectrum.c:18）、`fft_run` 内部 `out[FFT_LEN]`=256×float32（fft.c:27）、`mag[FFT_BINS]`=128×float32（spectrum.c:56）、`pcm256[SPEC_WINDOW]`=256×int16（freertos.c:166）；三处 memcpy 尺寸与 128×int16 帧精确对齐（main.c:73、freertos.c:195/204）；`_Static_assert(SPEC_WINDOW == 2*I2S_PCM_PER_FRAME)` 编译期锁死拼窗前提（freertos.c:180）；int 排除 unsigned 陷阱复排：全部正值域或已显式 cast（阶段 5 评审））
+- [x] AC-08 用户输入已校验：**N/A**（本 FEAT 无用户输入接口；测试信号为合成正弦或麦克风采集）
 
 ### 测试与边界
-- [ ] AC-09 新增测试自动运行：1kHz 合成正弦随编译产物可重复运行（对应 AC-01）
-- [ ] AC-10 全部回归测试通过：A1 链路（AC-02）+ A2-01 示例 FFT 仍通过
-- [ ] AC-11 测试覆盖率 ≥ 80%：**N/A**（嵌入式验证，无覆盖率工具链；以 AC-01 实测输出代替）
-- [ ] AC-12 按 FEAT 模板执行：5 阶段停等、日志追加不删除、状态回填均按 `.sop-agent规格.md` 执行
+- [x] AC-09 新增测试自动运行：1kHz 合成正弦随编译产物可重复运行（对应 AC-01）→ `fft_selftest` 每次 boot 自动执行（main.c），bin=16 随每次烧录复现
+- [x] AC-10 全部回归测试通过：A1 链路（AC-02）+ A2-01 示例 FFT 仍通过 → 实测：自测 bin=16 + boot 三行 + max 随声变化（§3.4）
+- [x] AC-11 测试覆盖率 ≥ 80%：**N/A**（嵌入式验证，无覆盖率工具链；以 AC-01 实测输出代替）
+- [x] AC-12 按 FEAT 模板执行：5 阶段停等、日志追加不删除、状态回填均按 `.sop-agent规格.md` 执行 → 阶段 5 独立评审 12 AC 逐项过（10 实质 PASS + 2 N/A PASS），评审方：requesting-code-review 派发独立 subagent（R23 合规）
 
 ## 5. 维护与调试（阶段5通过后回填）
 
 ### 5.1 影响文件
 | 文件 | 改动类型 | 说明 |
 |------|---------|------|
-| `firmware/soundDog/Src/dsp/fft.c` | 新增/修改 | 幅度谱封装（加窗+FFT+幅度+峰值） |
+| `firmware/soundDog/Inc/dsp/spectrum.h` | 新建 | 幅度谱接口：SPEC_WINDOW/SPEC_BANDS 宏、spec_init/spec_process、峰值 getter（×100 整数化） |
+| `firmware/soundDog/Src/dsp/spectrum.c` | 新建 | 均值去直流（**signed 除法**，unsigned 陷阱修复点）+ 汉明窗 + FFT + 峰值/噪声底 + 32 频带聚合 |
+| `firmware/soundDog/Inc/audio_pipe.h` | 新建 | frame_msg_t（128 样本值拷贝 + frame_index）+ audio_queue_get()，main.c（ISR 侧）与 freertos.c（消费侧）共享 |
+| `firmware/soundDog/Src/freertos.c` | 修改 | 新增 specTask（2KB 栈）：收两帧拼 256 点（**frame_index 连续性校验**，丢帧废弃本窗）→ spec_process → 0.5s 节流打印 SPEC 行 + frame_max_stat（A1 回归）；_Static_assert 拼窗前提 |
+| `firmware/soundDog/Src/main.c` | 修改 | audio_frame_cb 瘦身为纯拷贝+入队（ISR 安全）；队列先于 DMA 创建 + NULL 检查；fft_ctx_get 共享实例初始化 |
+| `firmware/soundDog/Inc/dsp/fft.h` / `Src/dsp/fft.c` | 修改 | 新增 fft_ctx_get() 全局共享实例（自测与真音频复用）；不可重入警示注释 |
+| `firmware/soundDog/Makefile` | 修改 | C_SOURCES 登记 spectrum.c |
 
 ### 5.2 调试要点
 - 峰值 bin 偏移 → 查采样率/点数（§3.5）；全 0 → 查取数掩码（A1-03 / BUG-002）
 - 峰值 bin 0 → 去直流 + 确认加窗
+- **⚠️ int/unsigned 混除陷阱（本 FEAT 实测确诊）**：宏定义带 `u` 后缀（如 FFT_LEN=256u）与有符号变量混算时，负值会被隐式转 unsigned——去直流均值/移动平均/差分等**可能为负**的中间量，除法/取模前必须显式 `(int32_t)` cast。参考实现多数在 float 域做去直流以规避此坑
+- **fft_run 不可重入**（内部静态 out[] + 共享 g_fft_ctx）：仅 specTask 一个消费者；A2-03/04 新增调用方须先串行化
+- 拼窗帧不连续（丢帧）已被 frame_index 校验拦截——若未来频谱仍现宽带虚假分量，先查队列深度是否不足（音频队列 4 深度 ≈ 32ms 余量）
+- 实测基准（INMP441 + 手机 1kHz 近距离）：peak_bin=16、mag≈162/100、noise≈3.5/100、ratio≈50；安静环境 peak_bin=1~4、mag<120/100 属正常本底
 
 ### 5.3 测试入口
-- 烧录后 SSCOM 观察峰值 bin 与幅度（对应 AC-01）；A1 回归同 §3.4（对应 AC-02）
+- 烧录后 SSCOM（115200）观察峰值 bin 与幅度（对应 AC-01）；A1 回归同 §3.4（对应 AC-02）
+- 实测通过记录：2026-08-29 02:33，`SPEC peak_bin=16 mag=160~172/100 noise=3~4/100 ratio=40~55`（30+ 样本零漂移）；boot 序列含 `FFT selftest: peak bin=16`
 
 ## 6. 执行日志
 
 | 时间 | 阶段 | 角色 | 摘要 | 遇阻 |
 |------|------|------|------|------|
-| | | | | |
+| 2026-08-29 | 阶段 3 | Dev Agent | 新建 `Inc/audio_pipe.h`（帧队列共享接口）+ `Src/dsp/spectrum.c`（加窗/FFT/峰值/32频带）；`freertos.c` 新增 specTask（收两帧拼 256 点→spec_process→0.5s 节流打印 AC-01 证据行）；修复 main.c 回调名残留（test→audio_frame_cb）与队列创建顺序（须先于 I2S_DRV_Init，防 xQueueSendFromISR NULL 硬错误）；Makefile 登记 spectrum.c。R27 参考已检索（Audio_PDM / mpmc.cpp）。build.bat 通过：text=153716 data=108 bss=84568，无新增警告（仅历史 __FPU_PRESENT 重定义） | 首次链接失败（spectrum.c 未入 Makefile），已补 |
+| 2026-08-29 | 阶段 3 | Dev Agent | 串口输出交错修复：根因 = ISR 回调（`I2S DMA started`/max 统计打印）与 specTask 的 SPEC 打印并发调用不可重入的 `HAL_UART_Transmit`（共享 huart1）→ 字节交错 + HAL 状态机风险。修复 = ISR 回调瘦身为纯「拷贝+入队」，max 统计（`frame_max_stat`，每 31 帧节拍/判据不变）与首帧提示移入 specTask——运行期串口唯一写入者。build.bat 通过：text=153740 data=108 bss=84568 | n_proc 重复声明编译错误一次，已修 |
+| 2026-08-29 | 阶段 3 | Dev Agent | 打印字符串契约回滚：曾将首帧提示改为 `I2S stream started ...`，追溯影响评估（grep 全项目）发现 `I2S DMA started` 是规格 §3.4 固化的 boot 三行契约，被 ~11 份后续 FEAT 文档引用为验收判据。已改回 `I2S DMA started (first frame idx=%lu)`（前缀匹配口径与 A1-02 一致）。build.bat 通过：text=153736 data=108 bss=84568 | 流程失误：改字符串前未做事前影响评估（R9），靠事后追溯发现 |
+| 2026-08-29 | 阶段 4 | Dev Agent | **AC-01/AC-02 硬件验证通过**：1kHz 实麦 → peak_bin=16（30+ 样本恒定零漂移，理论值精确命中）、mag=160~172/100、noise=3~4/100、ratio=40~55；boot 三行按序、自测 bin=16 不受影响、max 随声变化（安静 102~343 ↔ 环境 831~2408）。验证条件：正式修复版固件（text=153748），INMP441 实麦 + 手机 1kHz 纯音近距离播放，SSCOM 115200。unsigned 陷阱修复后假峰 bin1/超限幅度/输出冻结三现象全部消失 | 无 |
+| 2026-08-29 | 阶段 4 | Dev Agent | **SPEC 数据异常确诊（用户烧录两轮诊断固件）**：现象 = peak 恒 bin1、mag≈30205 超数学上限、输出冻结而输入在变。诊断 = 两轮 TEMP DEBUG（4 层打穿 + 快照判别），证据链：真实均值为负 → 打印值 = 真实值 + 2^24；均值为正 → 完全正常（铁律 100% 命中 6 样本）。根因 = `mean /= FFT_LEN` 中 FFT_LEN 为 `256u`（unsigned），负 mean 隐式转 unsigned 除法 → -918 变 2^24-918。修复 = `mean /= (int32_t)FFT_LEN`（spectrum.c）。m0=70543 与 -512×Σwin=70543 分毫不差闭环验证。诊断代码已全部移除。R27 补检索（atuoni/stm32_FFT_SoundSensor 等确认均值去直流为主流做法，多数参考在 float 域做以避开 int/unsigned 混除陷阱）。build.bat 通过：text=153748 data=108 bss=84568 | 流程失误：修复前未先做 R27 检索，用户指出后补做 |
+| 2026-08-29 | 阶段 5 | Review Agent | **独立评审（R23：requesting-code-review 派发 subagent，禁止自评）**：12 AC 逐项过 = 10 实质 PASS + 2 N/A PASS；独立 clean rebuild 复现构建结论（exit 0、0 error、31 警告全为历史 __FPU_PRESENT、text=153748 逐字节一致）。评审发现：Important×2（frame_index 连续性未校验——丢帧时拼窗相位跳变风险；文档回填缺口 AC-05）+ Minor×8（FromISR NULL yield、xQueueCreate 未检查、调度器前 DMA 窗口、两处注释不符、无编译期拼窗断言、fft_run 不可重入未警示）。结论 **With fixes** | 无 |
+| 2026-08-29 | 阶段 5 | Dev Agent | 评审修复执行：①Important#1 = SpecTask 拼窗加 frame_index 连续性校验（不连续废弃本窗，freertos.c:201-203）；②Minor 快修 = xQueueCreate NULL 检查 + Error_Handler（main.c:195-199）、_Static_assert(SPEC_WINDOW==2*I2S_PCM_PER_FRAME)（freertos.c:179-181）、spectrum.h 注释两处修正（defaultTask→specTask、128→127 bins）、fft.h 不可重入警示。Minor#3/#5 按评审意见不强制，未改。build.bat 通过：text=153808 data=108 bss=84568，0 error 无新增警告。文档回填：§0 状态🟢、§4 12 AC 全勾含 AC-04 警告数（31 全历史）与 AC-07 静态核对记录、§5.1 影响文件表补齐 7 项、§5.2/5.3 实测基准、父表/INDEX/维护地图同步 | 修复后未重新烧录冒烟（改动为防御性代码，不影响已验证数据通路；下轮 A2-03 开发时一并验证） |

@@ -182,4 +182,6 @@
 
 | 时间 | 阶段 | 角色 | 摘要 | 遇阻 |
 |------|------|------|------|------|
-| | | | | |
+| 2026-08-16 | 阶段1 准备 | Dev Agent | 模块丝印已核对（EN/VCC/A/B/GND×2/RXD/TXD）；`soundDog.ioc` 确认无 USART3（外设=DMA/FREERTOS/I2S3/NVIC/RCC/SYS/USART1）；影响范围：ioc/usart.c/h/新增rs485_drv/Makefile/接线，EN(PD11) 初始必须为低 | 无（RS485 模块已到货，可进阶段2设计；接线测试待模块到手） |
+| 2026-08-16 | 阶段2 设计 | Dev Agent | 定案手写 HAL（不动 ioc）：huart3 照 huart1 模式，PD8/PD9=AF7、`__HAL_RCC_USART3/GPIO_D` 时钟；EN(PD11) 推挽初始低；时序=发送前 EN=1→等TC→EN=0，空闲恒0；接口 RS485_Init/SetDirTx/SetDirRx/Send/Receive | 无 |
+| 2026-08-16 | 阶段3 实现 | Dev Agent | 已写：usart.c（huart3+MX_USART3_UART_Init+MspInit/MspDeInit USART3 分支）、usart.h、rs485_drv.c/.h、Makefile C_SOURCES、main.c（MX_USART3_UART_Init+RS485_Init+回环自测打印）；`build.bat` 通过（[ OK ] Build OK，零警告） | 无（首次编译漏 include usart.h，已修复） |

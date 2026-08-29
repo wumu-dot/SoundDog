@@ -48,6 +48,12 @@
 | `bugs/BUG-20260815-001-*.md` | CubeMX 未配 Serial Wire 导致 SWD 锁死（P0 假砖） |
 | `bugs/BUG-20260816-001-*.md` | I2S DMA Size 翻倍导致缓冲区溢出踩坏 RTOS（P0） |
 | `bugs/BUG-20260816-002-*.md` | I2S 数据与 WS 槽 16SCK 偏移，取数须用高 16 位（P1） |
+| `bugs/BUG-20260829-001-*.md` | 频谱假峰：宏 256u 与负均值混算，负值隐式转 unsigned（P1） |
+| `bugs/BUG-20260829-002-*.md` | 裁剪版 HAL 无 I2C 文件，官方仓库 vendored 补齐（P2） |
+| `bugs/BUG-20260829-003-*.md` | ISR 与任务并发 printf：输出交错 + HAL_UART 不可重入（P2） |
+| `bugs/BUG-20260829-004-*.md` | 改掉 boot 契约字符串 I2S DMA started 前缀（P1） |
+| `bugs/BUG-20260829-005-*.md` | OLED 手拼 I2C 控制字节帧违反手册，静默乱码（P1） |
+| `bugs/BUG-20260829-006-*.md` | 调度器前 xQueueCreate 残留 BASEPRI→SysTick 灭→HAL_Delay 死循环（P0，OLED 黑屏真根因） |
 | `../firmware/flash_isp.bat` | ISP 串口救砖烧录（BOOT0 + USART1） |
 | `../firmware/check_doc.bat` | DOC-STATE 漂移检测（双击运行） |
 | `../firmware/check_doc_fix.bat` | DOC-STATE 漂移自动修复（双击运行） |
