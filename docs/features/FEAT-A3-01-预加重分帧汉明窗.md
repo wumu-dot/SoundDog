@@ -34,7 +34,73 @@
 - 帧移 **10ms = 160 样**；相邻帧重叠 400−160=240 样 = 15ms（由上述数值算术推导）。
 - 窗函数 **汉明窗**（A2-02 已用过）；标准定义 `w[n] = 0.54 − 0.46·cos(2πn/(N−1))`，N=400 → 首尾 w[0]/w[N−1]≈0.08、中心≈1.0（公式推导）。
 - 输入取数：数据在 32 位字**低 16 位**，取 `(int16_t)(raw & 0xFFFF)`（BUG-20260816-002）。
-- **FFT 点数：待定（需人确认）**（400 样非 2 的幂：补零至 512 / 截断策略未定；影响 A3-02 输入）。
+- **FFT 点数：512 补零（2026-08-30 阶段 2 定稿）**——400 样帧尾部补 112 零至 512 点（2 的幂，RFFT 可用）。仅影响 A3-02（`arm_mfcc_f32` 入参 fftLen=512），本阶段只产出 400 样加窗帧，不落地补零。调研佐证：hemantnile 同构参数（400 帧 + 512 RFFT）。
+
+### 1.5 设计定稿（阶段 2 产出，2026-08-30，人已确认"按推荐"）
+
+**数据流（方案 A：specTask 旁路，不新增任务）**
+
+```
+ISR → audio_queue(128样/帧) → specTask 拼 256 样有效窗（丢帧校验后）
+                                    ├→ spec_process()      （A2-02/03/04 原路，零改动）
+                                    └→ mfcc_feed(pcm256)   （A3-01 新增旁路，紧邻其后）
+```
+
+- **挂接点**：`spec_process(pcm256, bands)` 之后一行（[freertos.c:224](file:///c:/Projects/SoundDog/firmware/soundDog/App/freertos.c)）。仅在丢帧校验通过后喂入 → MFCC 与频谱**吃同一段有效数据**；丢帧窗两边同弃，流一致。
+- **不新增任务/队列**：A3-01 是纯预处理旁路（~4 万乘加/秒，M4F 无压力）；独立 mfccTask 推迟到 A3-03 计算量上来后再评估。`fft_run` 不可重入约束不受影响（本阶段不调 FFT）。
+
+**模块设计（`BSP/mfcc.c/h`，遵循现行 App/BSP 四层架构）**
+
+```c
+/* mfcc.h —— 接口（全部数值来自 §1.4，无自造） */
+#define MFCC_FRAME_LEN   400u    /* 25ms @ 16kHz */
+#define MFCC_FRAME_SHIFT 160u    /* 10ms 帧移 */
+#define MFCC_PREEMPH     0.97f   /* 预加重系数 α */
+
+void     mfcc_init(void);                          /* 生成汉明窗表（arm_cos_f32，一次） */
+void     mfcc_feed(const int16_t *pcm, uint32_t n);/* 喂有效 PCM 块（内部逐样处理） */
+const float32_t *mfcc_last_frame(void);            /* 最新加窗帧 400×float32（A3-02 输入） */
+uint32_t mfcc_frame_count(void);                   /* 已产出帧数（打印/验收用） */
+typedef struct {                                    /* 打印统计快照（值拷贝） */
+  uint32_t frame_idx;      /* 帧号（0 起） */
+  int32_t  w0_x1000;       /* 加窗帧首样 ×1000（期望 ≈ w[0]×输入，静音时≈0） */
+  int32_t  wmid_x1000;     /* 加窗帧中心样 ×1000 */
+  int32_t  energy_x100;    /* 帧均方能量 ×100（∫y²/400，float 域算完缩放） */
+} mfcc_stat_t;
+void     mfcc_get_stat(mfcc_stat_t *out);
+```
+
+**内部机制（三条关键设计）**
+
+1. **流式预加重**：`y[n]=x[n]−0.97·x[n−1]`，`x_prev` 为跨块静态状态——差分状态**不随帧清零**（否则每帧首样错；§7.1 调研确认无先例可抄，自研点）。
+2. **400 样环形缓冲 + 逐样精确出帧**：`ring[400]`、写位 `wr`（`ring[wr]` 恒为最老样）；计数 `total`、下次出帧点 `next_emit`（首帧 400，此后 +160）。**逐样判定**（非块末判定）：`total==next_emit` 瞬间快照 `out[k]=ring[(wr+k)%400]`——保证帧移严格 160 样无抖动（块喂 256 与 160 不通约，块末批量出帧会产生 0~255 样抖动，此设计消除之）。
+3. **汉明窗表 `const float32_t hamming[400]`**：`mfcc_init()` 用 `arm_cos_f32`（CMSIS-DSP，已链）运行期生成一次，避免手写 400 项常量表（防抄错）与 libm 依赖疑虑。出帧时乘窗入输出帧，同步累计能量。
+
+**内存预算（全部静态，遵循"大数组静态分配"约定）**：ring 400×f32=1.6KB + 输出帧 1.6KB + 窗表 1.6KB（运行期生成 → **.bss 非 flash**）≈ **RAM +4.8KB**（bss 86080→~90.9KB，F407 192KB RAM 充裕）；代码 Flash +~1.5KB。specTask 栈零增量（无大局部数组）。
+
+**unsigned 陷阱防御（lessons R1）**：预加重差分输出有负值——全程 float32 域计算，`(wr+k)%400` 索引全 uint32 非负运算，无符号陷阱面。
+
+**打印设计（USART1 单写者规则：specTask 是唯一 printf 侧，合规）**：tick 差值节流 ≥1000ms，格式：
+
+```
+MFCC f=123 w0=45 wmid=998 e=1234
+```
+
+（f=帧号；w0/wmid=×1000 整数；e=帧均方能量×100。AC-01 证据：f 每秒 +100；AC-02 证据：有声输入时 wmid≈1000×|输入| 量级、静音≈0。）
+
+**改动影响地图（R9，CodeGraph 2026-08-30 重建后实证：索引 146→655 文件）**
+
+| 变更 | 被影响方（CodeGraph 实证） | 影响性质 |
+|---|---|---|
+| 新增 `BSP/mfcc.c/h` | `mfcc_*` 符号全项目零命中（grep+codegraph 双确认） | **零存量冲突**：纯新文件，无任何现有调用者 |
+| freertos.c +1 include / specTask 入口 +`mfcc_init()` / 循环 +`mfcc_feed(pcm256,256)` 1 行 / +MFCC 打印块（1s 节流） | `spec_process` 全项目唯一调用者 = SpecTask（freertos.c:174）；`spec_display_update` 唯一调用者 = SpecTask；`fft_run` 调用者 = fft_selftest(main.c:109) + spec_process——**本改动不触 fft_run**（mfcc 不调 FFT） | 单文件内追加，插入点在 spec_process 与 spec_display_update 之间；ISR/队列/DisplayTask/main.c boot 序列零改动 |
+| Makefile +1 行 C_SOURCES | BSP 编译单元登记模式（i2s_drv/spectrum/fft/oled_drv 同列） | 常规登记；`-IBSP` include 路径已存在；`arm_cos_f32.c` **已在链接**（Makefile:96，A2-01 登记过）→ 零新增库文件 |
+| RAM +4.8KB（.bss 86080→~90.9KB） | 无（F407 192KB，余量 50%+） | 无堆/栈增量；specTask 2KB 栈不放大 |
+| CPU：mfcc_feed 每 16ms 块（256 预加重乘加 + 出帧时 400 乘加，~4 万乘加/秒） | specTask 当前负载：256 点 FFT × 62.5/s ≈ 每窗 ~2ms + BANDS 打印 ~17ms/200ms | 增量 <1%，无实时性风险 |
+| 新打印 `MFCC ...`（1s 节流，~30B） | USART1 单写者：SPEC（0.5s）+ BANDS（0.2s，Transmit）+ MFCC（1s）均出自 **specTask 同一写者**——BUG-003/评审 Important#2 规则保持 | 合规；串口负载 30B/s，带宽无感 |
+| boot 三行契约 | 不动 main.c、不动既有打印字符串 | 零风险（A2-04 教训：新行只增前缀不改旧串） |
+
+**回归判据（AC-10）**：SPEC 行 0.5s 节拍不乱、BANDS 0.2s 节拍不乱、OLED 柱状图照常动、boot 三行逐字不变——四条均有现成观测点，回归成本零。
 
 ## 2. 执行路线图（5 阶段）
 
@@ -113,8 +179,14 @@
    I2S_DRV_Init ret=0
    I2S DMA started
    ```
-3. 观察预处理打印（打印格式：**待定（需人确认）**）：帧号递增；核对**帧长 = 400 样**（记录：___ 样）；窗函数首尾 w[0]≈0.08、中心≈1.0（记录：w[0]=___、中心=___）。
-4. 对麦克风吹气：帧能量应随声音变化（记录能量变化范围：___ ~ ___）。
+3. 观察预处理打印（格式已定稿，~1s 一行）：
+   ```
+   MFCC f=123 w0=45 wmid=998 e=1234
+   ```
+   帧号 f 递增，**每秒约 +100**（10ms 帧移；记录 10 秒增量：___）；wmid 吹气时明显大于安静时。
+   **帧长=400 核对方法**：帧产出前 25ms 无帧（首帧 f=0 出现在 DMA started 后约 0.4s——含 2 帧 I2S 队列暖机），此后匀速 +100/s 即 400/160 滑窗正确（记录首帧出现时序：___）。
+   **窗函数核对方法**（AC-02，推导口径）：喂入 1kHz 正弦时 wmid≈999×|峰值|×千分之一量级——对麦克风放 1kHz 音频，观察 wmid 有无数量级响应；w[0]≈0.08 的验证由 arm_cos_f32 公式生成保证（w0_x1000=首样×窗×1000，正弦相位未知故绝对值不作硬判据，活值为证）。
+4. 对麦克风吹气：帧能量 e 应随声音明显变化（安静 ___ ~ 吹气 ___）。
 
 ### 3.4 故障速查表
 | 现象 | 可能原因 | 处理 |
@@ -168,4 +240,23 @@
 
 | 时间 | 阶段 | 角色 | 摘要 | 遇阻 |
 |------|------|------|------|------|
-| | | | | |
+| 2026-08-30 | 阶段 1（准备 + R27 预研） | Dev Agent | 依赖确认（A1-04 Fs 实测 / A2 🟢 / audio_queue 128 样接口就绪）；**GitHub 同类项目调研 4 项 + 本地 CMSIS-DSP 核实（详见 §7 预研附录）**；影响清单与 3 个待定决策项产出 | 无 |
+| 2026-08-30 | 阶段 2（设计） | Dev Agent | 三决策定稿（人确认"按推荐"）：方案 A specTask 旁路 / 512 补零（A3-02 落地）/ MFCC 行格式 ~1s；设计定稿 §1.5（流式预加重 + 400 环形缓冲逐样出帧 + arm_cos_f32 运行期窗表）；§3.3 操作单回填打印格式与核对方法 | 无 |
+
+## 7. R27 预研附录（2026-08-30，GitHub 同类项目调研）
+
+### 7.1 调研对象与结论
+
+| # | 项目 | 平台 | 与本项目相关点 | 可抄 / 不可抄（R28 口径） |
+|---|------|------|--------------|--------------------------|
+| 1 | **CMSIS-DSP 官方 `arm_mfcc_f32`**（V1.10.0，本地已 vendored，`firmware/cmsis-dsp/repo/Source/TransformFunctions/arm_mfcc_*.c` 核实存在） | Cortex-M 通用 | **重大发现：官方库自带完整 MFCC 流程**（加窗→FFT→Mel 稀疏滤波→DCT），入参直接收原始 400 样帧 + 窗系数表 + Mel 表（Python 脚本生成，官方 Scripts 目录） | ✅ **算法层可整体复用**——A3-02/03 的 Mel/DCT 不必手写，直接调 `arm_mfcc_init_f32`+`arm_mfcc_f32`；但它**不含预加重与分帧**（输入假设已是成帧数据），A3-01 的流式分帧仍需自研 ✅ 硬件一致性：同为 Cortex-M4F + 同库版本，无 R28 风险 |
+| 2 | [hemantnile/stm32-speech-recognition](https://github.com/hemantnile/stm32-speech-recognition)（已读 `src/dsp.c` 全文） | F4 + CMSIS-DSP | **参数完全同构**：FRAME_SIZE=400、汉明窗 400 查找表、RFFT 512 补零、mel 257×26 稀疏阵、DCT 26×12、12 系数/帧；分帧用**预计算偏移表 `frame_base[i]`**（整段缓冲回放式取帧） | ✅ 可抄：**参数体系**（400/512/26/12 与本 FEAT §2 规格逐项一致）、CMSIS-DSP 调用序列（arm_mult_f32 加窗→arm_rfft_fast_f32→arm_cmplx_mag_squared→arm_mat_mult→log10f→arm_mat_mult）；⚠️ 注意：**它没做预加重**（用 DC 去除+归一化代替），本 FEAT 要求 α=0.97 差分，此环节不能照抄它；且它的取帧是"整段缓冲回放"式，与本项目**流式 128 样队列**输入不同，分帧缓冲策略须自研 |
+| 3 | [embedded-ele529/speech_recognition_project](https://github.com/embedded-ele529/speech_recognition_project) | **STM32F407（与本板同型号！）** | 采集→CMSIS-DSP FIR 降采样→Hanning 窗+FFT→Mel 滤波→推理；FreeRTOS 任务化流水线 | ✅ 可抄：**任务划分与数据流架构**（FreeRTOS 队列 + 任务串行化消费——与 A2 已落地的四层架构一致，佐证 A3 数据接入方案 A）；⚠️ 它用 Hanning 窗（本 FEAT 指定 Hamming——一字之差，R28 式"近硬件陷阱"：窗函数选错不报错但频谱特性不同，编码时按 §2 规格为准） |
+| 4 | CSDN《小智音箱 MFCC 语音前端处理》（嵌入式工程视角综述） | H7/ESP32 级 | 六步流程工程口径确认：α=0.97、25ms/400 点、汉明窗、Mel(f)=2595·log10(1+f/700)、26 滤波器、log10、DCT 取前 12~13 | ✅ 可抄：流程顺序与默认参数（与本 FEAT §2 一致的教科书口径）；RAM 预算经验：MFCC 帧级中间量用 float32、大表 const 化 |
+
+### 7.2 预研结论（三条设计输入）
+
+1. **A3 线算法栈定调**：A3-01 自研（预加重+流式分帧——官方库不管这段），A3-02/03 **优先评估直接调 `arm_mfcc_f32`**（本地库已有，零移植成本），Mel/DCT 表用官方 Python 脚本生成——把"手写 Mel"的 R28 风险整体消掉。此发现将写入 A3 父文档影响 A3-02/03 立项。
+2. **参数体系四项目交叉一致**（400 样 / 512 点 / 26 Mel / 12 DCT / α=0.97）：本 FEAT §2 规格无需调整，按此执行。
+3. **本项目独有难点不变**：上述项目均为"整段缓冲后离线回放"式分帧，无人在**128 样流式队列**上做 160 样帧移滑窗——A3-01 的 400 样环形缓冲 + 跨帧预加重状态保持是自研核心（§2 已有方案）。
+

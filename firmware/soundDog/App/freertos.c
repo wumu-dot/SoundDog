@@ -29,6 +29,7 @@
 #include "spectrum.h"        /* A2-02: spec_process + 峰值/噪声底 getter */
 #include "oled_drv.h"        /* A2-03: OLED_DrawSpectrum + 错误计数 */
 #include "usart.h"           /* A2-04: huart1（BANDS 行直接 Transmit） */
+#include "mfcc.h"            /* A3-01: 预加重+分帧+汉明窗旁路 */
 #include <string.h>
 #include <stdio.h>
 /* USER CODE END Includes */
@@ -183,6 +184,7 @@ static void SpecTask(void *argument)
   static uint32_t    bands[SPEC_BANDS];
   static char        bands_line[256];   /* A2-04 BANDS 行缓冲（静态，~224B 最长） */
   TickType_t         t_bands_last = 0u; /* A2-04 节流基准（tick 差值门控） */
+  TickType_t         t_mfcc_last = 0u; /* A3-01 MFCC 行节流基准（1s） */
 
   if (q == NULL) {
     printf("specTask: audio queue NULL, halt\r\n");
@@ -197,6 +199,9 @@ static void SpecTask(void *argument)
   /* 拼窗前提：SPEC_WINDOW 必须恰为两帧之和，否则 memcpy 错位（评审 Minor#7） */
   _Static_assert(SPEC_WINDOW == (2u * I2S_PCM_PER_FRAME),
                  "SPEC_WINDOW must equal 2 x I2S_PCM_PER_FRAME");
+
+  /* A3-01: 汉明窗表生成（arm_cos_f32，一次；设计定稿 §1.5） */
+  mfcc_init();
 
   for (;;)
   {
@@ -222,6 +227,10 @@ static void SpecTask(void *argument)
     memcpy(&pcm256[I2S_PCM_PER_FRAME], msg.pcm, sizeof(msg.pcm));
 
     spec_process(pcm256, bands);
+
+    /* A3-01: MFCC 前置预处理旁路（设计定稿 §1.5：与频谱吃同段有效数据；
+     * 丢帧窗在上方 continue 时两边同弃，流一致。内部 ~4 万乘加/秒） */
+    mfcc_feed(pcm256, (uint32_t)I2S_PCM_PER_FRAME * 2u);
 
     /* A2-03: 更新显示快照（写侧临界区，~µs 级；displayTask 5Hz 读） */
     spec_display_update(bands);
@@ -272,6 +281,20 @@ static void SpecTask(void *argument)
                (unsigned long)oled_err);
         oled_last_err = oled_err;
       }
+    }
+
+    /* A3-01: MFCC 预处理统计行（设计定稿：tick 差值 1s 节流，整数缩放）。
+     * AC-01 证据：f 每秒 +100（10ms 帧移）；AC-02 证据：wmid 有声时
+     * 数量级响应、静音≈0。USART1 单写者规则：本任务是唯一 printf 侧。 */
+    TickType_t t_mfcc_now = xTaskGetTickCount();
+    if ((t_mfcc_now - t_mfcc_last) >= pdMS_TO_TICKS(1000u)) {
+      mfcc_stat_t st;
+      mfcc_get_stat(&st);
+      printf("MFCC f=%lu w0=%ld wmid=%ld e=%ld\r\n",
+             (unsigned long)st.frame_idx,
+             (long)st.w0_x1000, (long)st.wmid_x1000,
+             (long)st.energy_x100);
+      t_mfcc_last = t_mfcc_now;
     }
   }
 }

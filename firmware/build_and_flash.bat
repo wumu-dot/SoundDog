@@ -32,6 +32,9 @@ echo [ OK ] Build OK
 :: ========== 2. Flash ==========
 echo.
 echo [2/2] Flashing via ST-Link (SWD)...
+:: 杀残留 openocd 进程——残留会抓着 ST-Link 导致 LIBUSB_ERROR_ACCESS
+:: （2026-08-30 A3-01 烧录失败根因；oocd_probe 探针会话退出后可能残留）
+taskkill /f /im openocd.exe >nul 2>&1
 openocd -f openocd.cfg -c "program soundDog/build/soundDog.elf verify reset exit"
 if %errorlevel% neq 0 (
     echo.
