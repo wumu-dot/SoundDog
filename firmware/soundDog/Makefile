@@ -81,6 +81,7 @@ Src/syscalls.c \
 BSP/fft.c \
 BSP/spectrum.c \
 BSP/mfcc.c \
+BSP/mel.c \
 Src/i2c.c \
 BSP/oled_drv.c \
 Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_i2c.c \
@@ -97,6 +98,7 @@ Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_i2c_ex.c \
 ../cmsis-dsp/repo/Source/FastMathFunctions/arm_sin_f32.c \
 ../cmsis-dsp/repo/Source/FastMathFunctions/arm_cos_f32.c \
 ../cmsis-dsp/repo/Source/BasicMathFunctions/arm_mult_f32.c \
+../cmsis-dsp/repo/Source/BasicMathFunctions/arm_dot_prod_f32.c \
 ../cmsis-dsp/repo/Source/BasicMathFunctions/arm_scale_f32.c \
 ../cmsis-dsp/repo/Source/SupportFunctions/arm_copy_f32.c \
 ../cmsis-dsp/repo/Source/SupportFunctions/arm_fill_f32.c

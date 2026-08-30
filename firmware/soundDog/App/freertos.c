@@ -30,8 +30,12 @@
 #include "oled_drv.h"        /* A2-03: OLED_DrawSpectrum + 错误计数 */
 #include "usart.h"           /* A2-04: huart1（BANDS 行直接 Transmit） */
 #include "mfcc.h"            /* A3-01: 预加重+分帧+汉明窗旁路 */
+#include "mel.h"             /* A3-02: Mel 滤波器组（512 rfft + 32 维能量） */
 #include <string.h>
 #include <stdio.h>
+/* 评审 M-2：两模块帧长编译期耦合检查（A3-01 改帧长时即刻暴露，防静默错位） */
+_Static_assert(MEL_FRAME_IN == MFCC_FRAME_LEN,
+               "mel input frame must equal mfcc frame length");
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -185,6 +189,10 @@ static void SpecTask(void *argument)
   static char        bands_line[256];   /* A2-04 BANDS 行缓冲（静态，~224B 最长） */
   TickType_t         t_bands_last = 0u; /* A2-04 节流基准（tick 差值门控） */
   TickType_t         t_mfcc_last = 0u; /* A3-01 MFCC 行节流基准（1s） */
+  TickType_t         t_mel_last  = 0u; /* A3-02 MEL 行节流基准（1s） */
+  uint32_t           mel_frame_seen = 0u; /* A3-02: 已 Mel 处理的帧计数 */
+  static float32_t   mel_vals[MEL_NB_BANDS];   /* A3-02: Mel 能量（静态，大数组约定） */
+  static char        mel_line[320];            /* A3-02: MEL 行缓冲（32×~8B 最长 ~270B） */
 
   if (q == NULL) {
     printf("specTask: audio queue NULL, halt\r\n");
@@ -202,6 +210,11 @@ static void SpecTask(void *argument)
 
   /* A3-01: 汉明窗表生成（arm_cos_f32，一次；设计定稿 §1.5） */
   mfcc_init();
+
+  /* A3-02: 512 点 rfft 实例初始化（独立于 fft.c 256 点实例，一次） */
+  if (mel_init() != 0) {
+    printf("mel_init failed, MEL disabled\r\n");
+  }
 
   for (;;)
   {
@@ -232,6 +245,17 @@ static void SpecTask(void *argument)
      * 丢帧窗在上方 continue 时两边同弃，流一致。内部 ~4 万乘加/秒） */
     mfcc_feed(pcm256, (uint32_t)I2S_PCM_PER_FRAME * 2u);
 
+    /* A3-02: Mel 滤波（帧计数变化才处理——128 样块与 160 样帧不通约，
+     * 同款轮询触发机制；mel_process 内部立即拷贝输入帧（坑 7）。
+     * 评审 I-2 口径更正：本机制处理"每窗最新帧"——一窗双出帧时前帧被
+     * 跳过，实际 ≈62.5 帧/s（非 100）；CPU ≈7.5%。A3-03 立项须先决策：
+     * 接受 62.5/s 或 mfcc.c 改逐帧输出（回调/帧队列）。 */
+    uint32_t mel_fcnt = mfcc_frame_count();
+    if (mel_fcnt != mel_frame_seen) {
+      mel_frame_seen = mel_fcnt;
+      (void)mel_process(mfcc_last_frame(), mel_vals);
+    }
+
     /* A2-03: 更新显示快照（写侧临界区，~µs 级；displayTask 5Hz 读） */
     spec_display_update(bands);
 
@@ -250,7 +274,11 @@ static void SpecTask(void *argument)
         len += snprintf(&bands_line[len], sizeof(bands_line) - (size_t)len,
                         (b == 0u) ? "%lu" : ",%lu",
                         (unsigned long)bands[b]);
-        if (len >= (int32_t)sizeof(bands_line)) { break; }  /* 截断保护 */
+        if (len >= (int32_t)sizeof(bands_line)) { break; }
+      }
+      /* 评审 I-1 同款（A3-02 顺手闭环，防缺陷模式扩散）：钳位再补行尾 */
+      if (len > (int32_t)sizeof(bands_line) - 3) {
+        len = (int32_t)sizeof(bands_line) - 3;
       }
       if (len > 0) {
         (void)snprintf(&bands_line[len], sizeof(bands_line) - (size_t)len,
@@ -295,6 +323,40 @@ static void SpecTask(void *argument)
              (long)st.w0_x1000, (long)st.wmid_x1000,
              (long)st.energy_x100);
       t_mfcc_last = t_mfcc_now;
+    }
+
+    /* A3-02: MEL 行（b=峰值带 argmax + m=32 维能量 ×1 整数，1s 节流）。
+     * AC 判据：静音→全维≈0；1kHz 音→b=7（gen_mel_table.py 预测）；
+     * 吹气→宽带响应（b 低频带 + 高带同升）。
+     * 坑 3 预防：整帧一次 Transmit + 静态缓冲（BANDS 同款惯例）；~270B
+     * ≈ 23ms，与 BANDS(200ms)/MFCC(1s) 偶发同窗最坏 ~44ms 略超队列深度
+     * 32ms → 偶尔丢 1 音频帧（f=99/s，判据 ≥98 容许；超标则拆 2 行降级）。 */
+    TickType_t t_mel_now = xTaskGetTickCount();
+    if ((t_mel_now - t_mel_last) >= pdMS_TO_TICKS(1000u)) {
+      t_mel_last = t_mel_now;
+      uint32_t peak = 0u;
+      for (uint32_t b = 1u; b < MEL_NB_BANDS; b++) {
+        if (mel_vals[b] > mel_vals[peak]) { peak = b; }
+      }
+      int32_t len = snprintf(mel_line, sizeof(mel_line), "MEL b=%lu m=",
+                             (unsigned long)peak);
+      for (uint32_t b = 0u; (b < MEL_NB_BANDS) && (len > 0); b++) {
+        len += snprintf(&mel_line[len], sizeof(mel_line) - (size_t)len,
+                        (b == 0u) ? "%ld" : ",%ld",
+                        (long)mel_vals[b]);   /* 坑 6：显式强转防符号陷阱 */
+        if (len >= (int32_t)sizeof(mel_line)) { break; }
+      }
+      /* 评审 I-1：len 可超缓冲长（snprintf 返回"本应写入"长度）——
+       * 先钳位再补行尾，否则 &mel_line[len] 越界 + size_t 下溢。 */
+      if (len > (int32_t)sizeof(mel_line) - 3) {
+        len = (int32_t)sizeof(mel_line) - 3;
+      }
+      if (len > 0) {
+        (void)snprintf(&mel_line[len], sizeof(mel_line) - (size_t)len,
+                       "\r\n");
+        (void)HAL_UART_Transmit(&huart1, (uint8_t *)mel_line,
+                                (uint16_t)strlen(mel_line), 100u);
+      }
     }
   }
 }
