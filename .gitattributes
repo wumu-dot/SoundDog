@@ -1,0 +1,8 @@
+# .gitattributes —— 行尾强制策略（2026-08-30，A3-01 阶段5 bat 事故根治）
+# 事故：cmd 无法解析 LF-only 的 .bat（双击报碎片命令错 'C:\Program' 不是内部或外部命令）
+# 根因：编辑工具直接写工作区文件为 LF，git blob 亦为 LF，autocrlf=false 的机器/zip 导出检出 LF 即炸
+# 修复：*.bat 强制检出 CRLF（repo 内仍归一化存储，检出自适应保证工作区必为 CRLF）
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+*.sh text eol=lf
+*.py text eol=lf
