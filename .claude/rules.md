@@ -101,7 +101,7 @@
 
 \[R26] 调试任何外设/器件问题前，必须先查 `外部资源索引.md` 和项目内预研文档（如 CubeMX\_I2S3配置详解.md）中该器件的章节——数据手册结论、时序图、预研期写下的排查方法优先于现场推导。预研文档中已标注"需上板实测"的方案（如 RAW dump 打印法）必须先执行，禁止重新发明。**与 R27 的顺序：本条优先，文档无覆盖再外搜**。（案例：BUG-002 的 4 字周期答案就画在 CubeMX\_I2S3配置详解.md §0.4 的时序图里，8/16\~8/28 期间无人回读，绕了 12 天弯路）
 
-\[R27] 编写新的功能代码前，必须先检索 GitHub 上成熟开源项目的同类实现（用 WebSearch/WebFetch 搜"<功能> STM32/<库> example"，重点看官方仓库与高星项目），对照至少 1\~2 个参考实现后再动手；参考到的关键做法（数据结构、流程、坑）在代码注释或 FEAT 文档中注明出处链接。**预研三源（2026-08-30 A3-02 增补，缺一不可只看代码）**：
+\[MUST]\[R27] 编写新的功能代码前，必须先检索 GitHub 上成熟开源项目的同类实现（用 WebSearch/WebFetch 搜"<功能> STM32/<库> example"，重点看官方仓库与高星项目），对照至少 1\~2 个参考实现后再动手；参考到的关键做法（数据结构、流程、坑）在代码注释或 FEAT 文档中注明出处链接。**预研三源（2026-08-30 A3-02 增补，缺一不可只看代码；已工具强制，见 §6 R27 钩子）**：
 
 1. **源码内部行为**：调库前必读被调函数源码——官方函数可能有隐藏副作用（A3-02 实证：`arm_mfcc_f32` 自带归一化+加窗，对已加窗帧整体调用即"窗叠窗"静默数值错）；
 2. **Issue 区**：官方/参考仓库的 Issues（搜关键词 + 已关标签）是踩坑富矿——API 误用、边界条件、版本坑往往不在 README 里（用 `github.com/<repo>/issues?q=<关键词>` WebFetch）；
@@ -136,9 +136,11 @@
 
 ## §6 工具强制钩子（把"AI 自觉"升级为"工具拦截"）
 
-* **R19 禁区 pre-commit 检查**：提交时自动检查 staged 文件对 Core/Drivers/lvgl/Middlewares 的变更——**新增文件（vendored 合法流程，如 CMSIS-DSP/HAL\_I2C 引入）放行**；**修改已有库文件则拦截**并警告 R19。实现：[scripts/check\_r19\_zone.ps1](../scripts/check_r19_zone.ps1) + `.git/hooks/pre-commit`（调用脚本；hook 不进版本库，换机重建一条命令：`powershell -File scripts/check_r19_zone.ps1 -InstallHook`，须在仓库根目录执行）。
+* **R19 禁区 pre-commit 检查**：提交时自动检查 staged 文件对 Core/Drivers/lvgl/Middlewares 的变更——**新增文件（vendored 合法流程，如 CMSIS-DSP/HAL\_I2C 引入）放行**；**修改已有库文件则拦截**并警告 R19。实现：[scripts/check\_r19\_zone.ps1](../scripts/check_r19_zone.ps1) + `.git/hooks/pre-commit`（调用脚本；hook 不进版本库，换机重建一条命令：`powershell -File scripts/check_r19_zone.ps1 -InstallHook`，须在仓库根目录执行——**该命令同时安装 R19+R27 双检查**）。
 
-* **\[MUST] 含中文的 .ps1 脚本必须存为 UTF-8 with BOM**：Windows PowerShell 5.1 对无 BOM 文件按 GBK 解码，中文注释行尾字节可与换行符组成非法双字节序列，把**下一行代码吞进注释**静默改变逻辑（2026-08-30 实测：check\_r19\_zone.ps1 的 `$violations +=` 被吞，脚本永远放行；加 BOM 后拦截恢复正常）。新建/编辑 .ps1 后用 `Format-Hex` 验证首字节为 `EF BB BF`。hook 文件本身须首行 shebang `#!/bin/sh`（Git for Windows 的 sh 无法 spawn 无 shebang 的裸命令行脚本）。
+* **R27 预研三源 pre-commit 检查**（2026-08-30）：提交时检测 staged 代码（firmware/soundDog 非库区 .c/.h）是否新增 HEAD 中 soundDog 树从未用过的 `arm_*` API 符号；有新 API 则要求**同一提交**的 staged 文档/注释新增行含三源证据标记：源①"源码"（被调函数源码阅读）、源②"issue"（Issue 区调研）、源③"坑"+"预防"（坑清单交付物）——缺任一即拦截。豁免口径与规则一致：复用已有 API 自动放行（R8）、机械改动无新 API 自然放行（§5）、逃生口 `--no-verify` 登记理由。实现：[scripts/check\_r27\_research.ps1](../scripts/check_r27_research.ps1)；已双向实测（拦截/复用放行/证据放行三案例，2026-08-30）。
 
-* 后续硬规则视需要逐条工具化（每条挂钩子前先在会话里跑通一次再启用；check\_r19\_zone 已完成"放行/拦截"双向实测）。
+* **\[MUST] 含中文的 .ps1 脚本必须存为 UTF-8 with BOM**：Windows PowerShell 5.1 对无 BOM 文件按 GBK 解码，中文注释行尾字节可与换行符组成非法双字节序列，把**下一行代码吞进注释**静默改变逻辑（2026-08-30 实测：check\_r19\_zone.ps1 的 `$violations +=` 被吞，脚本永远放行；加 BOM 后拦截恢复正常）。新建/编辑 .ps1 后用 `Format-Hex` 验证首字节为 `EF BB BF`。**注意（2026-08-30 二次实证）：编辑器/Edit 工具保存会剥掉 BOM 导致脚本静默失效（实测安装器无输出即中招）——每次编辑后必须重加 BOM 再验证**。hook 文件本身须首行 shebang `#!/bin/sh`（Git for Windows 的 sh 无法 spawn 无 shebang 的裸命令行脚本）。
+
+* 后续硬规则视需要逐条工具化（每条挂钩子前先在会话里跑通一次再启用；check\_r19\_zone 与 check\_r27\_research 均已完成双向实测）。
 

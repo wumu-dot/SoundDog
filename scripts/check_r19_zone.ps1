@@ -1,7 +1,7 @@
 ﻿# check_r19_zone.ps1 — R19 禁区 pre-commit 检查（2026-08-30，rules.md §6）
 # 用法：
 #   powershell -File scripts/check_r19_zone.ps1              # 检查 staged 文件（pre-commit 调用）
-#   powershell -File scripts/check_r19_zone.ps1 -InstallHook # 安装/重建 .git/hooks/pre-commit
+#   powershell -File scripts/check_r19_zone.ps1 -InstallHook # 安装/重建 .git/hooks/pre-commit（串接 R19+R27 双检查）
 # 判据：
 #   Core/ Drivers/ lvgl/ Middlewares/ 新增文件 = 放行（vendored 合法流程）
 #   修改/删除已有库文件 = 拦截（R19：禁止修改底层库核心逻辑；例外走 --no-verify 并在提交说明登记理由）
@@ -12,9 +12,12 @@ $zonePattern = '^(firmware/soundDog/(Core|Drivers|lvgl|Middlewares)/|Core/|Drive
 if ($InstallHook) {
     $hookPath = ".git/hooks/pre-commit"
     # 首行必须 shebang：Git for Windows 的 sh 无法 spawn 无 shebang 的裸命令行脚本
-    $hook = "#!/bin/sh`npowershell -NoProfile -ExecutionPolicy Bypass -File `"scripts/check_r19_zone.ps1`"`n"
+    # 串接双检查：R19 先跑（安全红线优先），R27 三源后跑，任一失败 exit 1 拦截提交
+    $hook = "#!/bin/sh`n" +
+            "powershell -NoProfile -ExecutionPolicy Bypass -File `"scripts/check_r19_zone.ps1`" || exit 1`n" +
+            "powershell -NoProfile -ExecutionPolicy Bypass -File `"scripts/check_r27_research.ps1`" || exit 1`n"
     Set-Content -Path $hookPath -Value $hook -Encoding ascii
-    Write-Host "[OK] pre-commit hook installed: $hookPath"
+    Write-Host "[OK] pre-commit hook installed (R19 zone + R27 research): $hookPath"
     exit 0
 }
 
