@@ -5,8 +5,8 @@
  * 三个自研核心机制（设计定稿 §1.5，调研确认无先例可抄）：
  *  1. 流式预加重：x_prev 跨块静态状态，不随帧清零（否则每帧首样错）
  *  2. 400 环形缓冲 + 逐样精确出帧：块喂 256 与帧移 160 不通约，
- *     逐样判定 total==next_emit 瞬间快照——帧移严格 160 样无抖动
- *     （块末批量出帧会有 0~255 样抖动）
+ *     逐样暖机/相位判定瞬间快照——帧移严格 160 样无抖动
+ *     （块末批量出帧会有 0~255 样抖动；有界小计数防回绕死锁）
  *  3. 汉明窗表 arm_cos_f32 运行期生成（防手抄 400 项常量表，R28 教训）
  *
  * 防御设计：
@@ -18,9 +18,7 @@
  */
 #include "mfcc.h"
 #include <string.h>
-
-/* arm_cos_f32（FastMathFunctions，Makefile:96 已链接） */
-#include "dsp/fast_math_functions.h"
+/* arm_cos_f32 原型已由 mfcc.h → arm_math.h 提供（BSP include 惯例随 fft.h） */
 
 /* ---- 内部状态（全静态） ---- */
 
@@ -34,9 +32,12 @@ static uint32_t   s_wr;          /* 下一个写入位置 */
 /* 流式预加重状态（跨块保持——设计机制 1） */
 static float32_t  s_x_prev;      /* x[n−1]，初值 0 */
 
-/* 出帧控制（设计机制 2） */
-static uint32_t   s_total;       /* 已喂入总样数（单调递增） */
-static uint32_t   s_next_emit;   /* 下次出帧的 total 判定点（首帧 400，此后 +160） */
+/* 出帧控制（机制 2；评审 Important#1 修复 2026-08-30：
+ * 原 s_total/s_next_emit 绝对样计数 uint32 在 16kHz 下 ~3.1 天回绕 →
+ * 出帧判定永假 → 静默死锁一圈。改为两个有界小循环量，永不回绕，
+ * 出帧时序数学完全等价：第 m 帧出帧于第 400+160(m−1) 样喂入瞬间） */
+static uint32_t   s_warmup;      /* 首帧暖机计数（0→400，攒满出首帧） */
+static uint32_t   s_phase;       /* 帧内相位（0→160，到 160 出帧归零） */
 
 /* 输出帧（加窗后）+ 统计 */
 static float32_t  s_frame_out[MFCC_FRAME_LEN];  /* 最新加窗帧（A3-02 输入） */
@@ -61,10 +62,10 @@ void mfcc_init(void)
   memset(s_ring, 0, sizeof(s_ring));
   memset(s_frame_out, 0, sizeof(s_frame_out));
   memset(&s_stat, 0, sizeof(s_stat));
-  s_wr        = 0u;
-  s_x_prev    = 0.0f;
-  s_total     = 0u;
-  s_next_emit = MFCC_FRAME_LEN;   /* 首帧：攒满 400 样即出 */
+  s_wr     = 0u;
+  s_x_prev = 0.0f;
+  s_warmup = 0u;
+  s_phase  = 0u;
   s_frame_cnt = 0u;
 }
 
@@ -113,12 +114,22 @@ void mfcc_feed(const int16_t *pcm, uint32_t n)
      *    由 emit_frame 的读取公式保证：先读后挪） */
     s_ring[s_wr] = y;
     s_wr = (s_wr + 1u) % MFCC_FRAME_LEN;
-    s_total++;
 
-    /* 3) 逐样精确出帧判定（机制 2 核心：消除块边界抖动） */
-    if (s_total == s_next_emit) {
-      emit_frame();
-      s_next_emit += MFCC_FRAME_SHIFT;
+    /* 3) 逐样精确出帧（机制 2 核心：消除块边界抖动；
+     *    暖机 400 出首帧，此后每 160 样出一帧——等价于原
+     *    total==next_emit 判定，但有界计数永不回绕） */
+    if (s_warmup < MFCC_FRAME_LEN) {
+      s_warmup++;
+      if (s_warmup == MFCC_FRAME_LEN) {
+        emit_frame();          /* 首帧：攒满 400 样 */
+        s_phase = 0u;
+      }
+    } else {
+      s_phase++;
+      if (s_phase == MFCC_FRAME_SHIFT) {
+        emit_frame();
+        s_phase = 0u;
+      }
     }
   }
 }

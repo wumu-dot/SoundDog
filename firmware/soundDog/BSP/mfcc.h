@@ -20,8 +20,9 @@
 
 #include <stdint.h>
 
-/* ARM_MATH_CM4F / __FPU_PRESENT 由 Makefile 全局定义（A2-01） */
-#include "dsp/transform_functions.h"   /* float32_t */
+/* ARM_MATH_CM4F / __FPU_PRESENT 由 Makefile 全局定义（A2-01）
+ * include 惯例统一随 fft.h（评审 Minor#4，2026-08-30） */
+#include "arm_math.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -42,7 +43,8 @@ typedef struct {
 
 /* ---- 接口 ---- */
 
-/** @brief 初始化：arm_cos_f32 生成汉明窗表（一次，调度器启动前调） */
+/** @brief 初始化：arm_cos_f32 生成汉明窗表（一次；任务入口调用，先于任何 mfcc_feed——
+ *         评审 Minor#3 修正：实际调用点在 SpecTask 入口，非调度器前） */
 void mfcc_init(void);
 
 /** @brief 喂入有效 PCM 块（int16 原始样值，来自 specTask 有效窗）
