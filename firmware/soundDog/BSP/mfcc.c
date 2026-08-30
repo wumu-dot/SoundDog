@@ -100,6 +100,9 @@ static void emit_frame(void)
   s_stat.w0_x1000    = (int32_t)(s_frame_out[0]   * 1000.0f);
   s_stat.wmid_x1000  = (int32_t)(s_frame_out[mid] * 1000.0f);
   s_stat.energy_x100 = (int32_t)((acc / (float32_t)MFCC_FRAME_LEN) * 100.0f);
+  /* A3-04 顺手项（A3-01 评审 Minor#2，第三次出现清偿）：吹气实测 e=INT32_MAX
+   * 为 float→int32 溢出 UB，钳位语义化输出（大音量=爆表可读，非依赖巧合值） */
+  if (s_stat.energy_x100 < 0) { s_stat.energy_x100 = INT32_MAX; }  /* 负值仅溢出产生 */
 
   s_frame_cnt++;
   /* 帧回调：逐帧同步通知（App 消费方须立即处理，数据下帧被覆盖） */
