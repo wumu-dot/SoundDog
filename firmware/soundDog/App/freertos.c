@@ -31,6 +31,7 @@
 #include "usart.h"           /* A2-04: huart1（BANDS 行直接 Transmit） */
 #include "mfcc.h"            /* A3-01: 预加重+分帧+汉明窗旁路 */
 #include "mel.h"             /* A3-02: Mel 滤波器组（512 rfft + 32 维能量） */
+#include "mfcc_dct.h"        /* A3-03: Log 能量 + DCT-II（32 维 Mel → 13 维 MFCC） */
 #include <string.h>
 #include <stdio.h>
 #include <stdbool.h>
@@ -179,10 +180,16 @@ static void frame_max_stat(uint32_t n_frames, const frame_msg_t *m)
  * 拷贝输入帧（坑 7），帧数据下帧覆盖无残留风险。 */
 static float32_t s_mel_vals[MEL_NB_BANDS];  /* Mel 能量（文件级静态：回调+MEL 行共用） */
 static bool      s_mel_ok = true;           /* mel_init 成功门控（评审 M-1：失败跳过 MEL 行） */
+static float32_t s_mfcc13[MFCC_DCT_OUT];    /* A3-03: 13 维 MFCC（回调串接+MFCC13 行共用） */
 
 static void mel_frame_cb(const float32_t *frame400)
 {
   (void)mel_process(frame400, s_mel_vals);
+  /* A3-03: Mel → Log+DCT 串接（同回调上下文逐帧，100 帧/s 规整 10ms 网格）。
+   * 纯函数无 init 门控；本回调仅在 mel_init 成功（s_mel_ok）时注册——
+   * 失败时不注册 → mfcc_dct_process 不执行，MFCC13 行由打印块
+   * s_mel_ok 门控同步禁用（评审 M-1：避免打印误导性全 0 行）。 */
+  (void)mfcc_dct_process(s_mel_vals, s_mfcc13);
 }
 
 /* ---- FEAT-A2-02: 频谱消费任务 ----
@@ -205,6 +212,8 @@ static void SpecTask(void *argument)
   TickType_t         t_mfcc_last = 0u; /* A3-01 MFCC 行节流基准（1s） */
   TickType_t         t_mel_last  = 0u; /* A3-02 MEL 行节流基准（1s） */
   static char        mel_line[320];    /* A3-02: MEL 行缓冲（32×~8B 最长 ~270B） */
+  TickType_t         t_dct_last  = 0u; /* A3-03 MFCC13 行节流基准（1s） */
+  static char        dct_line[128];    /* A3-03: MFCC13 行缓冲（13×~7B 最长 ~90B） */
 
   if (q == NULL) {
     printf("specTask: audio queue NULL, halt\r\n");
@@ -371,6 +380,33 @@ static void SpecTask(void *argument)
                        "\r\n");
         (void)HAL_UART_Transmit(&huart1, (uint8_t *)mel_line,
                                 (uint16_t)strlen(mel_line), 100u);
+      }
+    }
+
+    /* A3-03: MFCC13 行（13 维系数 ×100 整数定标 %ld，1s 节流）。
+     * 前缀 MFCC13 区别于 A3-01 的 "MFCC f=..." 统计行（前缀过滤防撞行）。
+     * AC 判据：静音→c0≈-11000 常数地板、其余≈0；1kHz 音→b=7 能量集中
+     * →低 k 维显著；吹气→宽谱形差异。坑 6：newlib-nano 无 %f → ×100
+     * 定标（设计 §1.5）；坑 3 预防同 MEL：整帧一次 Transmit + 静态缓冲。
+     * ~90B ≈ 8ms，串口预算内（§1.5 第五节）。 */
+    TickType_t t_dct_now = xTaskGetTickCount();
+    if (s_mel_ok && ((t_dct_now - t_dct_last) >= pdMS_TO_TICKS(1000u))) {  /* 评审 M-1：与 MEL 行同款门控 */
+      t_dct_last = t_dct_now;
+      int32_t len = snprintf(dct_line, sizeof(dct_line), "MFCC13 c=");
+      for (uint32_t k = 0u; (k < MFCC_DCT_OUT) && (len > 0); k++) {
+        len += snprintf(&dct_line[len], sizeof(dct_line) - (size_t)len,
+                        (k == 0u) ? "%ld" : ",%ld",
+                        (long)(s_mfcc13[k] * 100.0f));
+        if (len >= (int32_t)sizeof(dct_line)) { break; }
+      }
+      if (len > (int32_t)sizeof(dct_line) - 3) {   /* 评审 I-1 同款钳位 */
+        len = (int32_t)sizeof(dct_line) - 3;
+      }
+      if (len > 0) {
+        (void)snprintf(&dct_line[len], sizeof(dct_line) - (size_t)len,
+                       "\r\n");
+        (void)HAL_UART_Transmit(&huart1, (uint8_t *)dct_line,
+                                (uint16_t)strlen(dct_line), 100u);
       }
     }
   }

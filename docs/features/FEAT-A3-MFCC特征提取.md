@@ -31,7 +31,7 @@
 |-----------|------|----------|--------|------|------|------|
 | FEAT-A3-01 | 预加重+分帧+汉明窗 | 帧长 25ms(400样)/帧移 10ms(160样)，窗函数正确 | P1 | 依赖 A2 | 🟢完成（2026-08-30：实测 100.8 帧/s、吹气 e 350 倍、1kHz bin=16 锁定；评审回绕 bug 已修） | `FEAT-A3-01-预加重分帧汉明窗.md` |
 | FEAT-A3-02 | Mel 滤波器组 | 32 三角滤波器覆盖 300Hz~8kHz | P1 | 依赖 01 | 🟢完成（2026-08-30：1kHz→b=7 精确命中、表逐值 diff=0、评审 I-1/I-2 已修复复测） | `FEAT-A3-02-Mel滤波器组.md` |
-| FEAT-A3-03 | Log 能量 + DCT-II | 取前 13 维 MFCC，数值范围合理 | P1 | 依赖 02 | 🔴未开始 | `FEAT-A3-03-Log能量DCT-II.md` |
+| FEAT-A3-03 | Log 能量 + DCT-II | 取前 13 维 MFCC，数值范围合理 | P1 | 依赖 02 | 🟢完成（2026-08-30：三态实测 c0 可分 + PC 自洽 diff≤1.1 + 评审 Ready with fixes 四项修复复测） | `FEAT-A3-03-Log能量DCT-II.md` |
 | FEAT-A3-04 | 特征向量验证 | 串口打印 13 维，与已知信号特征吻合 | P1 | 依赖 03 | 🔴未开始 | `FEAT-A3-04-特征向量验证.md` |
 
 > 子FEAT 完成后回填本行状态与文件链接。
@@ -61,3 +61,4 @@
 | 2026-08-30 | A3-01 子FEAT 收官 | Dev/Test/Review | A3-01 🟢（项目表回填）：预加重+分帧+汉明窗落地，实测证据齐；评审 Important#1（uint32 样计数 3.1 天回绕静默死锁）已修复复测；附带沉淀 serial_capture.py 取证工具 + 7 个 bat LF→CRLF 修复。**A3-02 立项输入**：① 优先调官方 arm_mfcc_f32（§7.1 预研，Mel/DCT 不手写）② 消费 mfcc_last_frame() 400 样加窗帧 ③ 顺手项：energy_x100 饱和钳位（评审 Minor#2） | 无 |
 | 2026-08-30 | A3-02 子FEAT 收官 | Dev/Test/Review | A3-02 🟢（项目表回填）：mel.c/h 落地（独立 512 rfft 实例 + 473 系数稀疏表）；官方 arm_mfcc_f32 经核实**不可整体调用**（窗叠窗）只复用其分步算法（R27 三源：源码+Issue#279/#338 维护者口径）；实测 1kHz→**b=7 精确命中** + f=100/s 无丢帧；评审 Ready with fixes，I-1 snprintf 越界写（MEL+BANDS 两处）、I-2 实际 62.5 帧/s 口径更正、M-2 \_Static_assert 已修复复测。**A3-03 立项输入**：① 消费 mel_process() 32 维 Mel 能量（不做 log，偏移 +1e-6 留本 FEAT）② ~~决策项：接受 62.5 帧/s 或 mfcc.c 改逐帧输出~~ **已闭环（帧率口径修正）：改逐帧回调，见下一行** ③ 官方 mfccdata.py 可生成 DCT 表（gen_mel_table.py 同法）④ energy_x100 钳位顺手项仍未做 | 无 |
 | 2026-08-30 | 帧率口径修正（A3-02 后） | Dev/Test | **决策闭环：不接受 62.5 帧/s，改逐帧回调**。模拟逐样复刻证明原轮询为非均匀 10/20ms 跳帧（非"规整 16ms"误判）；GitHub 调研（micro_speech 官方 feature_provider.cc 逐帧补齐 + Edge Impulse 官方维护者"跳步=漏事件" + tensorflow #30376 帧网格不一致即失败）定性反模式。落地：mfcc_set_frame_cb 帧回调 API（仿 i2s_drv 惯例，RAM 零增量）+ freertos.c 注册逐帧 mel_process + 评审 M-1（mel_init 失败门控）顺手闭环；复测 f=98→904 严格 100/s、text +24B。**A4-01 硬约束：模版必须 10ms 帧移同网格生成（写入 A4-01 立项输入）** | 无 |
+| 2026-08-30 | A3-03 子FEAT 收官 | Dev/Test/Review | A3-03 🟢（项目表回填）：mfcc\_dct.c/h 落地（ln+1e-6 官方口径 / 13×32 矩阵 sqrt(2/N) / 416-MAC 自写 / **Mel 域 absmax 归一化**——音量不变性实证：吹气 MEL 千倍幅度 MFCC 同量级）；三态实测 c0 ≈-620/-3480/-860 + PC 自洽 diff≤1.1；R23 独立评审 Ready with fixes（I-1/M-1/M-2/M-3 全修复复测，含 CLAUDE.md 外部重排恢复）。**A3-04 立项输入**：① 消费 s\_mfcc13 13 维 float32（freertos.c 静态，×100 定标仅打印层）② e=INT32\_MAX 饱和钳位顺手项（A3-01 Minor#2 第三次出现，建议本 FEAT 闭环）③ 附带沉淀 gen\_dct\_table.py + a3\_03\_pc\_check.py ④ 坑 8：arm\_offset\_f32 参数顺序 (pSrc, offset, pDst, n)。**A4-01 硬约束追加：模版生成必须复刻 Mel 域归一化位置**（非官方时域位置，随帧率口径一并写入） | 工作区文档被外部程序覆写 4 次（每次恢复，疑似编辑器旧缓冲） |
