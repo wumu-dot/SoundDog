@@ -33,6 +33,7 @@
 #include "mel.h"             /* A3-02: Mel 滤波器组（512 rfft + 32 维能量） */
 #include <string.h>
 #include <stdio.h>
+#include <stdbool.h>
 /* 评审 M-2：两模块帧长编译期耦合检查（A3-01 改帧长时即刻暴露，防静默错位） */
 _Static_assert(MEL_FRAME_IN == MFCC_FRAME_LEN,
                "mel input frame must equal mfcc frame length");
@@ -87,6 +88,8 @@ const osThreadAttr_t defaultTask_attributes = {
 /* USER CODE BEGIN FunctionPrototypes */
 static void SpecTask(void *argument);
 static void DisplayTask(void *argument);
+/* A3-02 帧率口径修正：mfcc 出帧回调（specTask 上下文，逐帧 Mel 消费） */
+static void mel_frame_cb(const float32_t *frame400);
 /* USER CODE END FunctionPrototypes */
 
 void StartDefaultTask(void *argument);
@@ -171,6 +174,17 @@ static void frame_max_stat(uint32_t n_frames, const frame_msg_t *m)
   printf("[%lu] max=%ld\r\n", (unsigned long)m->frame_index, (long)max_val);
 }
 
+/* ---- A3-02 帧率口径修正：mfcc 出帧回调（specTask 上下文） ----
+ * 逐帧 Mel 消费（100 帧/s 规整 10ms 网格）。mel_process 内部立即
+ * 拷贝输入帧（坑 7），帧数据下帧覆盖无残留风险。 */
+static float32_t s_mel_vals[MEL_NB_BANDS];  /* Mel 能量（文件级静态：回调+MEL 行共用） */
+static bool      s_mel_ok = true;           /* mel_init 成功门控（评审 M-1：失败跳过 MEL 行） */
+
+static void mel_frame_cb(const float32_t *frame400)
+{
+  (void)mel_process(frame400, s_mel_vals);
+}
+
 /* ---- FEAT-A2-02: 频谱消费任务 ----
  * 架构参考（R27）：
  *   - github.com/Ahmed-Marnissi/Audio_PDM：DMA 回调入队 → FFT 任务消费
@@ -190,9 +204,7 @@ static void SpecTask(void *argument)
   TickType_t         t_bands_last = 0u; /* A2-04 节流基准（tick 差值门控） */
   TickType_t         t_mfcc_last = 0u; /* A3-01 MFCC 行节流基准（1s） */
   TickType_t         t_mel_last  = 0u; /* A3-02 MEL 行节流基准（1s） */
-  uint32_t           mel_frame_seen = 0u; /* A3-02: 已 Mel 处理的帧计数 */
-  static float32_t   mel_vals[MEL_NB_BANDS];   /* A3-02: Mel 能量（静态，大数组约定） */
-  static char        mel_line[320];            /* A3-02: MEL 行缓冲（32×~8B 最长 ~270B） */
+  static char        mel_line[320];    /* A3-02: MEL 行缓冲（32×~8B 最长 ~270B） */
 
   if (q == NULL) {
     printf("specTask: audio queue NULL, halt\r\n");
@@ -211,9 +223,17 @@ static void SpecTask(void *argument)
   /* A3-01: 汉明窗表生成（arm_cos_f32，一次；设计定稿 §1.5） */
   mfcc_init();
 
-  /* A3-02: 512 点 rfft 实例初始化（独立于 fft.c 256 点实例，一次） */
+  /* A3-02: 512 点 rfft 实例初始化（独立于 fft.c 256 点实例，一次）。
+   * 失败置门控（评审 M-1）：跳过 MEL 行，不再打全 0 误导诊断。 */
   if (mel_init() != 0) {
     printf("mel_init failed, MEL disabled\r\n");
+    s_mel_ok = false;
+  }
+
+  /* A3-02 帧率口径修正：注册逐帧回调（mel_init 失败则不注册，
+   * mfcc_feed 出帧仍正常走 MFCC 统计，仅跳过 Mel 计算） */
+  if (s_mel_ok) {
+    mfcc_set_frame_cb(mel_frame_cb);
   }
 
   for (;;)
@@ -242,19 +262,14 @@ static void SpecTask(void *argument)
     spec_process(pcm256, bands);
 
     /* A3-01: MFCC 前置预处理旁路（设计定稿 §1.5：与频谱吃同段有效数据；
-     * 丢帧窗在上方 continue 时两边同弃，流一致。内部 ~4 万乘加/秒） */
+     * 丢帧窗在上方 continue 时两边同弃，流一致。内部 ~4 万乘加/秒。
+     * 出帧时同步触发 mel_frame_cb → mel_process（逐帧，100 帧/s）。 */
     mfcc_feed(pcm256, (uint32_t)I2S_PCM_PER_FRAME * 2u);
 
-    /* A3-02: Mel 滤波（帧计数变化才处理——128 样块与 160 样帧不通约，
-     * 同款轮询触发机制；mel_process 内部立即拷贝输入帧（坑 7）。
-     * 评审 I-2 口径更正：本机制处理"每窗最新帧"——一窗双出帧时前帧被
-     * 跳过，实际 ≈62.5 帧/s（非 100）；CPU ≈7.5%。A3-03 立项须先决策：
-     * 接受 62.5/s 或 mfcc.c 改逐帧输出（回调/帧队列）。 */
-    uint32_t mel_fcnt = mfcc_frame_count();
-    if (mel_fcnt != mel_frame_seen) {
-      mel_frame_seen = mel_fcnt;
-      (void)mel_process(mfcc_last_frame(), mel_vals);
-    }
+    /* A3-02: Mel 滤波已改为 mfcc_set_frame_cb(mel_frame_cb) 逐帧回调
+     * （2026-08-30 帧率口径修正：原"帧计数轮询+只取最新帧"产生非均匀
+     * 10/20ms 跳帧丢 37.5%；GitHub 调研+模拟定论为反模式，回调保证
+     * 100 帧/s 规整 10ms 网格。CPU 7.5%→12%，预算内。） */
 
     /* A2-03: 更新显示快照（写侧临界区，~µs 级；displayTask 5Hz 读） */
     spec_display_update(bands);
@@ -332,18 +347,18 @@ static void SpecTask(void *argument)
      * ≈ 23ms，与 BANDS(200ms)/MFCC(1s) 偶发同窗最坏 ~44ms 略超队列深度
      * 32ms → 偶尔丢 1 音频帧（f=99/s，判据 ≥98 容许；超标则拆 2 行降级）。 */
     TickType_t t_mel_now = xTaskGetTickCount();
-    if ((t_mel_now - t_mel_last) >= pdMS_TO_TICKS(1000u)) {
+    if (s_mel_ok && ((t_mel_now - t_mel_last) >= pdMS_TO_TICKS(1000u))) {
       t_mel_last = t_mel_now;
       uint32_t peak = 0u;
       for (uint32_t b = 1u; b < MEL_NB_BANDS; b++) {
-        if (mel_vals[b] > mel_vals[peak]) { peak = b; }
+        if (s_mel_vals[b] > s_mel_vals[peak]) { peak = b; }
       }
       int32_t len = snprintf(mel_line, sizeof(mel_line), "MEL b=%lu m=",
                              (unsigned long)peak);
       for (uint32_t b = 0u; (b < MEL_NB_BANDS) && (len > 0); b++) {
         len += snprintf(&mel_line[len], sizeof(mel_line) - (size_t)len,
                         (b == 0u) ? "%ld" : ",%ld",
-                        (long)mel_vals[b]);   /* 坑 6：显式强转防符号陷阱 */
+                        (long)s_mel_vals[b]);   /* 坑 6：显式强转防符号陷阱 */
         if (len >= (int32_t)sizeof(mel_line)) { break; }
       }
       /* 评审 I-1：len 可超缓冲长（snprintf 返回"本应写入"长度）——

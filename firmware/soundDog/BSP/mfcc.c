@@ -44,6 +44,14 @@ static float32_t  s_frame_out[MFCC_FRAME_LEN];  /* 最新加窗帧（A3-02 输�
 static uint32_t   s_frame_cnt;   /* 已产出帧数 */
 static mfcc_stat_t s_stat;       /* 最新帧统计快照 */
 
+/* 帧回调（2026-08-30 帧率口径修正）：逐帧同步通知消费方 */
+static mfcc_frame_cb_t s_frame_cb;
+
+void mfcc_set_frame_cb(mfcc_frame_cb_t cb)
+{
+  s_frame_cb = cb;
+}
+
 /* ----------------------------------------------------------------------
  * mfcc_init：生成汉明窗表（一次，调度器前调用）
  * -------------------------------------------------------------------- */
@@ -94,6 +102,10 @@ static void emit_frame(void)
   s_stat.energy_x100 = (int32_t)((acc / (float32_t)MFCC_FRAME_LEN) * 100.0f);
 
   s_frame_cnt++;
+  /* 帧回调：逐帧同步通知（App 消费方须立即处理，数据下帧被覆盖） */
+  if (s_frame_cb != NULL) {
+    s_frame_cb(s_frame_out);
+  }
 }
 
 /* ----------------------------------------------------------------------

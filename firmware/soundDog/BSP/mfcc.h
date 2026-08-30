@@ -62,6 +62,19 @@ uint32_t mfcc_frame_count(void);
 /** @brief 取打印统计快照（§3.3 MFCC 行数据源） */
 void mfcc_get_stat(mfcc_stat_t *out);
 
+/* ---- 帧回调（2026-08-30 帧率口径修正，A3-03 前置） ---- */
+
+/** @brief 出帧回调类型：参数 frame400 指向模块内部输出帧（400×float32）
+ *  @note  回调在 mfcc_feed 调用者上下文（仅 specTask）同步执行；
+ *         帧数据在下一次出帧时被覆盖，回调内须立即消费（坑 7 约定）。 */
+typedef void (*mfcc_frame_cb_t)(const float32_t *frame400);
+
+/** @brief 注册出帧回调（NULL=解除注册；须在 mfcc_init 后、mfcc_feed 前设置）
+ *  @note  替代 App 层"帧计数轮询"——轮询+只取最新帧会产生非均匀
+ *         10/20ms 跳帧（丢 37.5%），回调保证逐帧消费（100 帧/s）。
+ *         惯例仿 i2s_drv audio_frame_cb（驱动架构约定 2026-08-28）。 */
+void mfcc_set_frame_cb(mfcc_frame_cb_t cb);
+
 #ifdef __cplusplus
 }
 #endif
