@@ -1,11 +1,40 @@
 # SoundDog 项目交接文档
 
-> **项目描述**：SoundDog 是一个 STM32F407ZGT6 音频采集项目，当前阶段（A1）用 **INMP441 数字麦克风 + I2S3 + DMA** 采集 16kHz 音频，串口打印 PCM 最大值验证链路。主控 HSE 8MHz → SYSCLK 168MHz，RTOS 为 FreeRTOS CMSIS-RTOS\_v2，工具链 Makefile + arm-none-eabi-gcc。
+> **项目描述**：SoundDog 是一个 STM32F407ZGT6 音频异常检测项目。完整链路：INMP441 麦克风 + I2S3 + DMA 采集 16kHz 音频 → FreeRTOS 队列 → 256 点 FFT 频谱（OLED 柱状图 + BANDS 串口）→ MFCC 13 维特征（预加重/分帧/Mel/Log/DCT，100 帧/s）→ K-means 16 质心模版欧氏距离 d_min 实时比对 → 连续帧防抖判决（在建）。主控 HSE 8MHz → SYSCLK 168MHz，RTOS 为 FreeRTOS CMSIS-RTOS\_v2，工具链 Makefile + arm-none-eabi-gcc。
 
-> 交接日期：2026-08-16（2026-08-28 大更新）
+> 交接日期：2026-08-16（2026-09-01 A4 中期更新）
 > 交接原因：切换 AI 助手
-> **最重要的一句话（2026-08-28 更新）：A1 音频采集链路已全面打通——新 INMP441 已换新并验证正常（吹气 max 冲满量程），BUG-002 已修复至 v10（4 字周期提取），A1-01/02/03 已完成；当前唯一剩余工作是 A1-04 逻辑分析仪实测 SCK，之后进入 A2 FFT。**
-> ~~最重要的一句话（2026-08-17，历史）：软件成果全部完好可用，唯一阻塞是硬件——INMP441 麦克风损坏（SD 高阻无输出），换一块新麦克风即可；核心板确认正常，无需换板。~~ ← 已解决：8/28 新麦到货验证通过
+> **最重要的一句话（2026-09-01）**：A1/A2/A3 全线收官，A4-01（离线模版）+ A4-02（距离比对）已收官；**A4-03 连续帧防抖正处于阶段 2 设计已确认、阶段 3 编码待启动的停等点**（方案 B 双轨判据 + 阈值 6.0 已由人拍板）——接手第一件事是读 §零 的快速上手路径，然后从 A4-03 阶段 3 继续。
+> ~~最重要的一句话（2026-08-28）：A1 音频采集链路已全面打通……~~（A1/A2 均已收官，见 §七）
+
+***
+
+## 零、新 Agent 快速上手（10 分钟路径，按顺序读）
+
+1. **`.claude/rules.md` §0**（30s）——当前主线、最相关规则、架构格局约束。**v3.0 共 32 条规则（R0\~R31），冲突仲裁顺序：安全红线 > 验证证据 > 流程停等 > Token 优化**
+2. **`docs/features/INDEX.md`**（1min）——全部 FEAT 状态表（A1~A8 及子项红绿灯）
+3. **本文档 §零点五**（2min）——在途任务 A4-03 的精确状态与设计决策
+4. **`docs/features/维护地图.md`**（2min）——每个源文件/脚本/数据文件的归属 FEAT 与状态
+5. **`docs/features/FEAT-A4-03-连续帧防抖.md`**（4min）——在途 FEAT 全文（重点 §1.4 参数、§执行日志）
+6. 开工前自检：`git status`（应干净）、`git log --oneline -5`（HEAD 应为 A4-02 收官提交）
+
+**新会话第一条回复前**：按 rules.md §0 元规则输出热加载摘要块（当前阶段/重点规则/禁止触碰/已知约束）。
+
+**红线速记（详见 rules.md §2）**：不碰 Core/Drivers/lvgl/Middlewares 核心逻辑（R19）；改引脚先看 hal\_msp.c（R20）；声称"完成"必贴证据（R21）；编码前先查三源（R31，2026-09-01 新增）。
+
+## 零点五、当前在途任务：A4-03 连续帧防抖（阶段 2→3 停等点）
+
+> 这是接手后唯一需要立即推进的工作。2026-09-01 状态快照（详细设计以 FEAT 文档与阶段 2 设计输出为准）：
+
+* **进度**：阶段 1（依赖确认/影响范围）+ 阶段 2（状态机设计）✅ 已完成并经人确认；**下一步 = 阶段 3 编码**
+* **已拍板决策**（人确认，不可推翻除非本人）：
+  - **方案 B 双轨判据**：轨1 连续 30 帧异常（规格判据）+ 轨2 100 帧滑窗 m-of-n ≥30 帧比率判据（敲击瞬态用），OR 先到先报；解除单轨连续 60 帧正常
+  - **阈值 TH=6.0**（A4-02 存证 CSV 定标：正常误判 1%/金属漏判 16%）
+  - 新文件 `BSP/debounce.c/h` 纯状态机 + freertos.c mel\_frame\_cb 内挂接 + 串口 `ALARM on/off` 行（事件触发即时打印，不走 1s 节流）
+* **设计要点**：100 bit 位图环形缓冲做滑窗（O(1)）；uint16 计数封顶 60000（AC-08）；静态初始化即看门狗复位清零；A6 灯/蜂鸣器仅预留 `debounce_get_alarm()` 接口
+* **挂接链**（freertos.c `mel_frame_cb`）：mel\_process → mfcc\_dct\_process → dist\_process（s\_dmin）→ **debounce\_process（本 FEAT 新增）**
+* **阶段 3 待办**：写 debounce.c/h → Makefile 登记（BUG-002 教训）→ build.bat → build\_and\_flash.bat → 阶段 4 按 §3.3 边界用例实测（29/30/59/60 帧）
+* **R27 三源结论已备**（A4-02 阶段 4 已研，直接引用）：prmon m-of-n 比率判据 / Edge Impulse 窗均值 / ViolaWake PR#34（max 不得取自抽稀子集）/ AdaBEAM mean+max 双轨先例
 
 ***
 
@@ -35,7 +64,22 @@ Phase B: 数据积累      → 用 Phase A 节点采集标注样本
 Phase C: 模型升级(可选) → MFCC 特征 → CMSIS-NN 二分类
 ```
 
-当前处于 **Phase A**，且是 Phase A 的最早期（A1：I2S 音频采集跑通），距离 MFCC/FFT/报警还有距离。
+当前处于 **Phase A** 的模版比对检测段（A4：已完成 01 离线模版 + 02 距离比对，03 防抖在建），距离报警输出（A6）和 RS485 组网（A5）还有两个 FEAT 组。
+
+### 1.3.1 固件音频链路现状（A4-02 收官时点，freertos.c 数据流）
+
+```
+ISR(DMA) → audio_queue → specTask:
+  ├─ fft_run → spectrum → OLED 柱状图 + SPEC/BANDS 行（1s 节流）
+  └─ mfcc_feed → [mel_frame_cb 回调, 100 帧/s]:
+       mel_process(32 维 Mel 能量)
+       → mfcc_dct_process(13 维 MFCC, s_mfcc13)
+       → dist_process(16 质心欧氏 d_min, s_dmin + 1s 窗峰值)
+       → [A4-03 待挂] debounce_process(双轨判决)
+  串口行前缀：boot/I2S_DRV/SPEC/BANDS/MFCC13/MEL/DMIN(d=瞬时 m=峰值)
+```
+
+**架构铁律**：specTask 单消费者、USART1 单写者、fft\_run 不可重入、ISR 仅拷贝入队（新增消费方必须进 mel\_frame\_cb 回调链，不得另起任务）。
 
 ### 1.4 技术栈
 
@@ -89,6 +133,16 @@ Phase C: 模型升级(可选) → MFCC 特征 → CMSIS-NN 二分类
 | `flash_isp.bat`                       | ISP 串口烧录（救砖用，BOOT0 + USART1） |
 | `build.sh` / `flash.sh`               | Git Bash 版                   |
 | `check_doc.bat` / `check_doc_fix.bat` | DOC-STATE 漂移检查/修复            |
+
+### 2.3.1 数据/工具链脚本（scripts/ 下，A4 时代新增）
+
+| 脚本 | 用途 |
+| ---- | ---- |
+| `collect_mfcc.py` | 串口采 MFCC13 → CSV（模版重采入口，600 帧自停） |
+| `kmeans_model.py` | K-means 聚类 + 导出 model\_normal.c/h（`--check` 复跑比对） |
+| `collect_dmin.py` | DMIN d/m 序列采集 → CSV（**A4-03 阈值标定/实测数据入口**） |
+| `analyze_dmin.py` | PC 复算 d\_min + 分维判别比（固件正确性离线闭环） |
+| `serial_capture.py` | 通用串口日志抓取（boot 三行 + 各行节拍） |
 
 ### 2.4 文档成果
 
@@ -210,14 +264,35 @@ I2S DMA started! waiting data...
 
 ## 七、当前阻塞点和待办
 
-> **2026-08-30 更新：无阻塞。A2 全线收官（父🟢 + 01/02/03/04 四子全 🟢），进入 A3（MFCC 特征提取）。** A2 主线成果：麦克风 → I2S DMA → FreeRTOS 队列 → 256 点 FFT 32 频带 → OLED 柱状图 + 串口 BANDS 行双输出全通；期间闭环 8 个 bug（详见 docs/bugs/ 与 lessons\_summary.md），沉淀 R28 规则与 `.skills/oocd_probe.ps1` 非侵入探针。~~A1 全线收官（2026-08-28）。~~ ~~阻塞点（唯一）：INMP441 麦克风损坏~~ ← 已解决（8/28 新麦验证通过）。
+> **2026-09-01 更新：无阻塞。A1/A2/A3 全线收官 + A4-01/A4-02 收官；A4-03 阶段 2 设计已确认待编码（见 §零点五）。**
 
-**当前待办（按顺序）**：
+### 7.1 活跃风险（2026-09-01 在案，新 Agent 必读）
 
-1. ~~A1-04 SCK 时钟核实~~ → **已完成（2026-08-28）**：Saleae Logic 1.2.17 实测 WS=16kHz 精确命中、SCK≈1MHz（真值 1.024MHz）→ Fs=16000Hz 无误，README"2 倍疑点"证伪关闭。工具备忘：zave 24M/8ch + Saleae Logic 1.2.17（`C:\Program Files\Saleae Inc\`，资料在 `桌面\stm32F407ZGT6\逻辑分析仪\`）
-2. ~~进入 A2 阶段~~ → **已完成（2026-08-30 全线收官）**：A2-01 CMSIS-DSP 🟢 / A2-02 FFT 幅度谱（实麦 1kHz→bin=16 零漂移）🟢 / A2-03 OLED 柱状图（12 AC 全绿）🟢 / A2-04 串口 BANDS 行（12 AC 全绿）🟢
-3. **进入 A3 阶段**：MFCC 特征提取（A3-01 预加重分帧 / A3-02 Mel 滤波器组 / A3-03 Log+DCT / A3-04 特征向量验证；输入接口已就绪——spec\_process 32 频带 + getter；fft\_run 不可重入，新增消费方须串行化；A3 大量出现均值/差分等可能为负的中间量，编码前先读 lessons\_summary unsigned 除法陷阱条目）
-4. A1-01 补录 C3/C4（电压数值、轻敲 PCB，可选，不阻塞）
-5. 补齐剩余外设（SHT30、RS485、LED PWM 等，pin\_config.h 已预留引脚；OLED 已于 A2-03 完成）
-6. RS485 回环自测失败排查（st=3，代码已 `#if 0` 封存，归 A5-01）
+| # | 风险 | 现状与对策 |
+|---|------|-----------|
+| 1 | **TRAE 编辑器过期缓冲区回写**（多次实锤：文档被静默回退/重排，含 rules.md 丢 R30 一次） | 编辑/恢复文档前后跑哈希静置验证；好版本及时 `git add` 入索引快照；发现内容回退先 `git restore` 再查编辑器打开的旧标签页（提示保存选"不保存"） |
+| 2 | **R27 pre-commit 钩子中文文件名 bug** | `git diff --cached --name-status` 输出八进制转义路径 → 钩子收集不到中文文档新增行。绕过法：三源证据写进代码注释（dist.c 头注释先例）。根治：钩子改用 `git -c core.quotepath=false`（一行，待做） |
+| 3 | **R31 时序缺口已补规则** | "看似机械"的小改动也必须先查三源再落盘（2026-09-01 峰值增强先写后研教训，规则已入 rules.md §3） |
+| 4 | **模版分布偏移** | model\_normal 采自抖音模拟工厂声；正式部署前建议现场重采（A4-01 §5.2 在案） |
+| 5 | **A4-02 遗留观察项** | DMIN/MFCC13 行无帧号对齐（串口丢行致 26% 配对错位）；吹气类异常与背景同分布不可分（异常类型边界交 A4-03 定义） |
+
+### 7.2 待办（按优先级）
+
+1. **A4-03 阶段 3 编码**（唯一在途，见 §零点五）→ 阶段 4 边界实测 → 阶段 5 评审收官
+2. A4-04 参数可调（RS485 下发阈值/帧数，依赖 A5）
+3. R27 钩子 quotepath 一行修复（随手项）
+4. 补齐剩余外设（SHT30、RS485 收发、LED PWM；pin\_config.h 已预留）
+5. RS485 回环自测失败排查（st=3，代码 `#if 0` 封存，归 A5-01）
+6. A1-01 补录 C3/C4（可选，不阻塞）
+
+### 7.3 关键提交锚点（证据链入口，`git log` 可查）
+
+| 提交 | 内容 |
+|------|------|
+| `76419e4` | A4-02 距离实时比对收官（12AC 全勾） |
+| `cf82345` | A4-02 中期成果（dist 模块 + R27 补研 + R31 入 rules） |
+| `40502df` | A4-01 离线模版生成收官 |
+| `27961dd` | rules.md v3.0（R30 风险分级固化） |
+
+> 里程碑级证据（采集数据/复算脚本）：`data/mfcc_normal_600.csv`（模版复现）、`data/dmin_*.csv` ×3（A4-03 阈值标定输入）、`scripts/analyze_dmin.py`（固件正确性 PC 闭环）。
 
