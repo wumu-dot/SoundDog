@@ -33,6 +33,7 @@
 #include "mel.h"             /* A3-02: Mel 滤波器组（512 rfft + 32 维能量） */
 #include "mfcc_dct.h"        /* A3-03: Log 能量 + DCT-II（32 维 Mel → 13 维 MFCC） */
 #include "dist.h"            /* A4-02: 距离实时比对（13 维 MFCC → d_min） */
+#include "debounce.h"        /* A4-03: 连续帧防抖判决状态机（双轨判据） */
 #include <string.h>
 #include <stdio.h>
 #include <stdbool.h>
@@ -187,6 +188,9 @@ static bool      s_mel_ok = true;           /* mel_init 成功门控（评审 M-
 static float32_t s_mfcc13[MFCC_DCT_OUT];    /* A3-03: 13 维 MFCC（回调串接+MFCC13 行共用） */
 static float32_t s_dmin = 0.0f;             /* A4-02: d_min（回调串接+DMIN 行共用） */
 static float32_t s_dmin_peak = 0.0f;        /* A4-02: 1s 窗内 100 帧 d_min 峰值（打印后清零） */
+static int s_prev_alarm = -1;               /* A4-03: 待打印事件状态（-1=无事件；0=解除；1=报警） */
+static int s_alarm_src = 0;                 /* A4-03: 事件来源（DB_SRC_*：解除=0/轨1=1/轨2=2） */
+static uint16_t s_alarm_count = 0u;         /* A4-03: 事件触发/解除帧数（AC-01/AC-02 记录值） */
 
 static void mel_frame_cb(const float32_t *frame400)
 {
@@ -202,6 +206,20 @@ static void mel_frame_cb(const float32_t *frame400)
    * 快照 d= 漏帧级瞬态，峰值 m= 覆盖 100 帧/s 内尖峰（AC-02 判别口径 + A4-03 阈值输入） */
   if (s_dmin > s_dmin_peak) {
     s_dmin_peak = s_dmin;
+  }
+  /* A4-03: 连续帧防抖判决（双轨：连续 30 帧 | 滑窗 30/100 帧 → 报警；连续 60 帧正常 → 解除）
+   * 同回调逐帧喂入（全帧无抽稀，坑 9 判据）；沿跳变置 s_prev_alarm（含来源/帧数），
+   * SpecTask 打印 ALARM 事件（坑 1：事件即时打印不走 1s 节流）。 */
+  {
+    int changed = 0, state = 0, src = 0;
+    uint16_t cnt = 0u;
+    int r = debounce_process(s_dmin > DB_THRESHOLD, &changed, &state, &src, &cnt);
+    (void)r;
+    if (changed) {
+      s_prev_alarm = state;   /* 0=解除/1=报警（打印块沿检测用） */
+      s_alarm_src = src;      /* 事件来源（诊断/评审） */
+      s_alarm_count = cnt;    /* 触发/解除帧数（AC-01/AC-02 记录值） */
+    }
   }
 }
 
@@ -451,6 +469,24 @@ static void SpecTask(void *argument)
         (void)HAL_UART_Transmit(&huart1, (uint8_t *)dmin_line,
                                 (uint16_t)len, 100u);
       }
+    }
+
+    /* A4-03: ALARM 事件打印（事件触发即时打印，不走 1s 节流——坑 1 预防）。
+     * s_prev_alarm 由 mel_frame_cb 沿跳变置 0(解除)/1(报警)，本块检测到
+     * 待打印事件即打印并复位 -1（不漏报、不刷屏）。格式供 §3.2/§3.3
+     * 边界用例记录（AC-01/AC-02 判据行）：
+     *   ALARM on  src=consec|mofn n=<触发帧数≥30>
+     *   ALARM off n=<连续正常帧数=60>
+     * 事件行与 DMIN 行独立 → 触发/解除瞬间即见，不依赖 1s 快照。 */
+    if (s_prev_alarm >= 0) {
+      if (s_prev_alarm) {
+        printf("ALARM on src=%s n=%lu\r\n",
+               (s_alarm_src == (int)DB_SRC_MOFN) ? "mofn" : "consec",
+               (unsigned long)s_alarm_count);
+      } else {
+        printf("ALARM off n=%lu\r\n", (unsigned long)s_alarm_count);
+      }
+      s_prev_alarm = -1;   /* 复位标志，等待下次状态变化 */
     }
   }
 }
