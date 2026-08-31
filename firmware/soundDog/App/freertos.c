@@ -436,10 +436,20 @@ static void SpecTask(void *argument)
                              "DMIN d=%ld m=%ld\r\n",
                              (long)(s_dmin * 100.0f),
                              (long)(s_dmin_peak * 100.0f));
+      if (len < 0) {
+        len = 0;                          /* 编码错误防御（评审 M-5） */
+      }
+      if ((size_t)len >= sizeof(dmin_line)) {
+        len = (int32_t)sizeof(dmin_line) - 1;  /* 钳位（评审 M-5） */
+      }
+      if (len >= 2 && (dmin_line[len - 2] != '\r' || dmin_line[len - 1] != '\n')) {
+        dmin_line[len - 2] = '\r';        /* 截断丢行尾时补 \r\n（防行粘连） */
+        dmin_line[len - 1] = '\n';
+      }
       s_dmin_peak = 0.0f;   /* 窗结束清零，下一秒重新累积 */
       if (len > 0) {
         (void)HAL_UART_Transmit(&huart1, (uint8_t *)dmin_line,
-                                (uint16_t)strlen(dmin_line), 100u);
+                                (uint16_t)len, 100u);
       }
     }
   }

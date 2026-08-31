@@ -45,6 +45,15 @@ while time.time() - t0 < DUR:
             pass
 ser.close()
 
+# 行配对防护（评审 I-1）：DMIN 与 MFCC13 行无帧号标记，串口丢行会导致按下标错位配对
+# （A4-02 金属轮实测 26% 行 Δ>0.5 即此因）。数量不一致时截断到公共长度并告警，
+# 错位数据禁止流入 A4-03 阈值标定。
+n_pair = min(len(ds), len(mfcc_rows))
+if len(ds) != len(mfcc_rows):
+    print(f"[WARN] DMIN {len(ds)} 行 vs MFCC13 {len(mfcc_rows)} 行不一致"
+          f"（串口丢行，按下标配对可能错位）→ CSV 截断至前 {n_pair} 行配对段")
+    ds, ms = ds[:n_pair], ms[:n_pair]
+
 print(f"\n===== DMIN 统计（标签: {TAG}）=====")
 for name, xs in (("瞬时 d", ds), ("1s 峰值 m", ms)):
     if xs:
