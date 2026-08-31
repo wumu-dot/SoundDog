@@ -32,12 +32,16 @@
 #include "mfcc.h"            /* A3-01: 预加重+分帧+汉明窗旁路 */
 #include "mel.h"             /* A3-02: Mel 滤波器组（512 rfft + 32 维能量） */
 #include "mfcc_dct.h"        /* A3-03: Log 能量 + DCT-II（32 维 Mel → 13 维 MFCC） */
+#include "dist.h"            /* A4-02: 距离实时比对（13 维 MFCC → d_min） */
 #include <string.h>
 #include <stdio.h>
 #include <stdbool.h>
 /* 评审 M-2：两模块帧长编译期耦合检查（A3-01 改帧长时即刻暴露，防静默错位） */
 _Static_assert(MEL_FRAME_IN == MFCC_FRAME_LEN,
                "mel input frame must equal mfcc frame length");
+/* A4-02 同款耦合检查：特征维度 = 模版维度（D 改动即刻暴露） */
+_Static_assert(MODEL_NORMAL_D == MFCC_DCT_OUT,
+               "model dim must equal mfcc output dim");
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -181,6 +185,8 @@ static void frame_max_stat(uint32_t n_frames, const frame_msg_t *m)
 static float32_t s_mel_vals[MEL_NB_BANDS];  /* Mel 能量（文件级静态：回调+MEL 行共用） */
 static bool      s_mel_ok = true;           /* mel_init 成功门控（评审 M-1：失败跳过 MEL 行） */
 static float32_t s_mfcc13[MFCC_DCT_OUT];    /* A3-03: 13 维 MFCC（回调串接+MFCC13 行共用） */
+static float32_t s_dmin = 0.0f;             /* A4-02: d_min（回调串接+DMIN 行共用） */
+static float32_t s_dmin_peak = 0.0f;        /* A4-02: 1s 窗内 100 帧 d_min 峰值（打印后清零） */
 
 static void mel_frame_cb(const float32_t *frame400)
 {
@@ -190,6 +196,13 @@ static void mel_frame_cb(const float32_t *frame400)
    * 失败时不注册 → mfcc_dct_process 不执行，MFCC13 行由打印块
    * s_mel_ok 门控同步禁用（评审 M-1：避免打印误导性全 0 行）。 */
   (void)mfcc_dct_process(s_mel_vals, s_mfcc13);
+  /* A4-02: 13 维 MFCC → d_min（逐帧，同网格；坑 7：同挂 s_mel_ok 门控链） */
+  (void)dist_process(s_mfcc13, &s_dmin);
+  /* A4-02 阶段4 诊断增强（R30 偏差登记）：1s 窗峰值统计——
+   * 快照 d= 漏帧级瞬态，峰值 m= 覆盖 100 帧/s 内尖峰（AC-02 判别口径 + A4-03 阈值输入） */
+  if (s_dmin > s_dmin_peak) {
+    s_dmin_peak = s_dmin;
+  }
 }
 
 /* ---- FEAT-A2-02: 频谱消费任务 ----
@@ -214,6 +227,8 @@ static void SpecTask(void *argument)
   static char        mel_line[320];    /* A3-02: MEL 行缓冲（32×~8B 最长 ~270B） */
   TickType_t         t_dct_last  = 0u; /* A3-03 MFCC13 行节流基准（1s） */
   static char        dct_line[128];    /* A3-03: MFCC13 行缓冲（13×~7B 最长 ~90B） */
+  TickType_t         t_dmin_last = 0u; /* A4-02 DMIN 行节流基准（1s） */
+  static char        dmin_line[32];    /* A4-02: DMIN 行缓冲（~12B 最长） */
 
   if (q == NULL) {
     printf("specTask: audio queue NULL, halt\r\n");
@@ -407,6 +422,24 @@ static void SpecTask(void *argument)
                        "\r\n");
         (void)HAL_UART_Transmit(&huart1, (uint8_t *)dct_line,
                                 (uint16_t)strlen(dct_line), 100u);
+      }
+    }
+
+    /* A4-02: DMIN 行（瞬时 d + 1s 窗峰值 m，均 ×100 整数定标 %ld，1s 节流）。
+     * 前缀 DMIN 区别于其他行（坑 4：采集解析前缀过滤防撞行）。
+     * ×100 定标（坑 5：newlib-nano 无 %f）；坑 4 预防同上：整行一次
+     * Transmit + 静态缓冲。~18B ≈ 2ms，串口预算内（§1.5 三）。 */
+    TickType_t t_dmin_now = xTaskGetTickCount();
+    if (s_mel_ok && ((t_dmin_now - t_dmin_last) >= pdMS_TO_TICKS(1000u))) {  /* 坑 7：同 s_mel_ok 门控 */
+      t_dmin_last = t_dmin_now;
+      int32_t len = snprintf(dmin_line, sizeof(dmin_line),
+                             "DMIN d=%ld m=%ld\r\n",
+                             (long)(s_dmin * 100.0f),
+                             (long)(s_dmin_peak * 100.0f));
+      s_dmin_peak = 0.0f;   /* 窗结束清零，下一秒重新累积 */
+      if (len > 0) {
+        (void)HAL_UART_Transmit(&huart1, (uint8_t *)dmin_line,
+                                (uint16_t)strlen(dmin_line), 100u);
       }
     }
   }
