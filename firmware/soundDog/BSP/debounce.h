@@ -39,6 +39,10 @@ extern "C" {
 #define DB_WIN_ANOM_CNT         30u    /* 轨2：窗内异常帧数 ≥ 此值 → 报警（30% 占比） */
 #define DB_COUNT_CAP            60000u /* 计数封顶（AC-08：60×1000 冗余，防溢出） */
 
+/* 编译期防御（评审 R：DB_COUNT_CAP 必须适配 uint16_t 计数器位宽，
+ * 防未来改宏/改类型静默破坏溢出防御）。同 freertos.c _Static_assert 惯例。 */
+_Static_assert(DB_COUNT_CAP <= 0xFFFFu, "DB_COUNT_CAP must fit uint16_t counter");
+
 /* ---- 状态 ---- */
 typedef enum {
   DB_NORMAL = 0,   /* 正常态（未报警） */
