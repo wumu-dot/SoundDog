@@ -34,6 +34,8 @@
 #include "mfcc_dct.h"        /* A3-03: Log 能量 + DCT-II（32 维 Mel → 13 维 MFCC） */
 #include "dist.h"            /* A4-02: 距离实时比对（13 维 MFCC → d_min） */
 #include "debounce.h"        /* A4-03: 连续帧防抖判决状态机（双轨判据） */
+#include "param.h"           /* A4-04: 运行期参数帧解析（RS485 USART3 下发） */
+#include "rs485_drv.h"       /* A4-04: RS485 半双工收发（EN=PD11 方向控制） */
 #include <string.h>
 #include <stdio.h>
 #include <stdbool.h>
@@ -81,6 +83,27 @@ static const osThreadAttr_t displayTask_attributes = {
   .stack_size = 1024 * 4,             /* 4096B（PROJECT_PLAN 规格） */
   .priority = (osPriority_t) osPriorityNormal,
 };
+
+/* FEAT-A4-04: 参数下发任务（RS485 USART3 收帧 → 帧解析 → 生效）
+ * 独立任务：不碰 specTask 关键路径（§1.4b 预警⑤）。栈 ~256B 预算
+ * （收 8 字节定长帧 + printf 行缓冲，静态局部，栈只留调用开销）。
+ * Normal 优先级，阻塞等字节 → 空闲不占 CPU（预警⑥：CPU 仅收帧时微秒级）。 */
+static osThreadId_t paramTaskHandle;
+static const osThreadAttr_t paramTask_attributes = {
+  .name = "paramTask",
+  .stack_size = 256 * 4,              /* 1KB（printf + 状态机余量） */
+  .priority = (osPriority_t) osPriorityNormal,
+};
+/* A5-01: 回环自测任务（一次性，跑完自删）。
+ * 放 RTOS 任务而非 main.c 裸机区：HAL_UART_Receive 依赖 SysTick 超时，
+ * 而裸机区（osKernelStart 前）SysTick 被 BASEPRI=0x50 屏蔽，超时永不触发
+ * → 死等（BUG-20260902-xxx，与 BUG-20260829-006 OLED HAL_Delay 同根）。 */
+static osThreadId_t rs485LoopTaskHandle;
+static const osThreadAttr_t rs485LoopTask_attributes = {
+  .name = "rs485Loop",
+  .stack_size = 256 * 4,              /* 1KB（printf + 缓冲余量） */
+  .priority = (osPriority_t) osPriorityHigh,  /* 高：避开 paramTask 抢占收帧 */
+};
 /* USER CODE END Variables */
 /* Definitions for defaultTask */
 osThreadId_t defaultTaskHandle;
@@ -94,8 +117,12 @@ const osThreadAttr_t defaultTask_attributes = {
 /* USER CODE BEGIN FunctionPrototypes */
 static void SpecTask(void *argument);
 static void DisplayTask(void *argument);
+static void ParamTask(void *argument);
+static void RS485LoopTask(void *argument);
 /* A3-02 帧率口径修正：mfcc 出帧回调（specTask 上下文，逐帧 Mel 消费） */
 static void mel_frame_cb(const float32_t *frame400);
+/* A4-04: 帧解析成功回调（param.c 调用；实现范围校验 + debounce 生效），见明细 */
+bool param_apply(uint8_t pid, uint16_t value);
 /* USER CODE END FunctionPrototypes */
 
 void StartDefaultTask(void *argument);
@@ -138,6 +165,10 @@ void MX_FREERTOS_Init(void) {
   specTaskHandle = osThreadNew(SpecTask, NULL, &specTask_attributes);
   /* FEAT-A2-03: OLED 显示任务（200ms 周期取快照刷新） */
   displayTaskHandle = osThreadNew(DisplayTask, NULL, &displayTask_attributes);
+  /* FEAT-A4-04: 参数下发任务（RS485 USART3 收帧 → 解析 → 生效） */
+  paramTaskHandle = osThreadNew(ParamTask, NULL, &paramTask_attributes);
+  /* A5-01: 回环自测（一次性，跑完自删；RTOS 内跑避开裸机 SysTick 屏蔽坑） */
+  rs485LoopTaskHandle = osThreadNew(RS485LoopTask, NULL, &rs485LoopTask_attributes);
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -191,6 +222,18 @@ static float32_t s_dmin_peak = 0.0f;        /* A4-02: 1s 窗内 100 帧 d_min �
 static int s_prev_alarm = -1;               /* A4-03: 待打印事件状态（-1=无事件；0=解除；1=报警） */
 static int s_alarm_src = 0;                 /* A4-03: 事件来源（DB_SRC_*：解除=0/轨1=1/轨2=2） */
 static uint16_t s_alarm_count = 0u;         /* A4-03: 事件触发/解除帧数（AC-01/AC-02 记录值） */
+/* A4-04: 参数下发事件（paramTask 置位，SpecTask 打印——USART1 单写者铁律） */
+static volatile int      s_param_print = -1; /* A4-04: 待打印参数事件（-1=无；0=拒绝；1=生效） */
+static volatile uint8_t  s_param_pid  = 0u;  /* A4-04: 事件所属参数 ID（打印用） */
+static volatile uint32_t s_param_val  = 0u;  /* A4-04: 事件值（生效=新值；拒绝=被拒值，×100 或原始） */
+/* A5-01: 回环自测结果（RS485LoopTask 置位，SpecTask 打印——USART1 单写者铁律）。
+ * rs485_loop_done: 0=未跑/-1=结果已打印；100=完成待打印
+ * rs485_loop_st   : 0=HAL_OK 1=HAL_ERROR 2=HAL_BUSY 3=HAL_TIMEOUT
+ * rs485_loop_match: 回环数据是否一致（1=MATCH 0=MISMATCH） */
+static volatile int      s_rs485_loop_done = 0;   /* A5-01: 回环任务完成标志 */
+static volatile int      s_rs485_send_st   = -1;  /* A5-01: Send 返回值 */
+static volatile int      s_rs485_recv_st   = -1;  /* A5-01: Receive 返回值 */
+static volatile int      s_rs485_loop_match= 0;   /* A5-01: 内容是否一致 */
 
 static void mel_frame_cb(const float32_t *frame400)
 {
@@ -213,7 +256,8 @@ static void mel_frame_cb(const float32_t *frame400)
   {
     int changed = 0, state = 0, src = 0;
     uint16_t cnt = 0u;
-    int r = debounce_process(s_dmin > DB_THRESHOLD, &changed, &state, &src, &cnt);
+    debounce_param_t dparam = debounce_get_param();   /* 副本（并发安全，项3） */
+    int r = debounce_process(s_dmin > dparam.threshold, &changed, &state, &src, &cnt);
     (void)r;
     if (changed) {
       s_prev_alarm = state;   /* 0=解除/1=报警（打印块沿检测用） */
@@ -221,6 +265,144 @@ static void mel_frame_cb(const float32_t *frame400)
       s_alarm_count = cnt;    /* 触发/解除帧数（AC-01/AC-02 记录值） */
     }
   }
+}
+
+/* ---- FEAT-A4-04: 帧解析生效回调（param.c 调用） ----
+ * 职责（§1.4b 边界）：范围校验（越界拒绝保留旧值）+ 组装 debounce_param_t → debounce_set_params。
+ * 范围定义 §1.4a 表 + PARAM_* 宏（禁止自造）：
+ *   TH=0x01：1.0~20.0（×100 定点，100~2000） | 触发/解除/窗内=1~100 | 滑窗=固定100拒改
+ * 返回值：true=生效，false=越界拒绝（param.c 据此计 PARAM_RX_DROP_OR）。
+ * 说明：只读 debounce 现值、改单字段后整组 set——默认值语义与 A4-03 完全一致。 */
+bool param_apply(uint8_t pid, uint16_t value)
+{
+  /* 读当前运行期值（副本，并发安全；单一数据源，float 阈值 + uint16 帧数） */
+  debounce_param_t p = debounce_get_param();
+
+  bool ok = true;
+  switch (pid) {
+    case PARAM_ID_TH:   /* 阈值 ×100 定点，范围 100~2000 */
+      if (value < PARAM_TH_MIN_x100 || value > PARAM_TH_MAX_x100) {
+        ok = false;
+      } else {
+        p.threshold = (float)value / 100.0f;
+      }
+      break;
+    case PARAM_ID_ALARM_CNT:
+      if (value < PARAM_FRAME_MIN || value > PARAM_FRAME_MAX) {
+        ok = false;
+      } else {
+        p.consec_anom_alarm = value;
+      }
+      break;
+    case PARAM_ID_RELEASE_CNT:
+      if (value < PARAM_FRAME_MIN || value > PARAM_FRAME_MAX) {
+        ok = false;
+      } else {
+        p.consec_norm_release = value;
+      }
+      break;
+    case PARAM_ID_WIN_LEN:  /* 滑窗固定 100，拒改（须严格等于固定值才算合法） */
+      if (value != PARAM_WIN_LEN_FIX) {
+        ok = false;         /* 拒改（影响①：位图容量耦合越界） */
+      }
+      /* p.win_len 不入结构体（宏固定）；等于 100 时视为合法但无变化 */
+      break;
+    case PARAM_ID_WIN_ANOM:
+      if (value < PARAM_FRAME_MIN || value > PARAM_FRAME_MAX) {
+        ok = false;
+      } else {
+        p.win_anom_cnt = value;
+      }
+      break;
+    default:
+      ok = false;           /* 未知参数 ID → 拒绝 */
+      break;
+  }
+
+  if (ok) {
+    debounce_set_params(&p);
+  }
+  return ok;
+}
+
+/* ---- FEAT-A4-04: 参数下发任务 ----
+ * 数据流：RS485(USART3) 逐字节 ← param_feed_byte 状态机 → 合法帧待处理。
+ * param_apply 已由 feed_byte 内部调用（解析+生效一体，§1.4c）。本任务只：
+ *   - 阻塞读 USART3 单字节 → param_feed_byte；
+ *   - 依据返回置参数事件（生效/拒绝），SpecTask 打印（USART1 单写者铁律）。
+ * 半双工：USART3 持续接收态（RS485_SetDirRx，main.c MODE_TX_RX 无需手动切发），
+ * 本 FEAT 只收不下发 → EN(PD11) 恒低=收，无需发送窗口。
+ * 回环自测（§3.3）：PC 下发同帧字节 → 状态机逐字节校验 → 事件打印即链路打通。 */
+static void ParamTask(void *argument)
+{
+  (void)argument;
+  uint8_t b;
+
+  for (;;) {
+    /* 阻塞收单字节（超时 100ms；空闲不占 CPU——预警⑥） */
+    if (HAL_UART_Receive(&huart3, &b, 1u, 100u) != HAL_OK) {
+      continue;
+    }
+    param_rx_t rx = param_feed_byte(b);
+    if (rx == PARAM_RX_FRAME || rx == PARAM_RX_DROP_OR) {
+      /* 置事件 → SpecTask 打印（不在此处 write，遵守单写者） */
+      s_param_print = (rx == PARAM_RX_FRAME) ? 1 : 0;
+      s_param_pid  = param_last_pid();
+      s_param_val  = (uint32_t)param_last_val();
+    } else if (rx == PARAM_RX_DROP_BAD) {
+      s_param_print = 0;
+      s_param_pid  = 0u;       /* 坏帧事件：id=0 标记（仅打印 bad 性质） */
+      s_param_val  = 0u;
+    }
+  }
+}
+
+/* ---- FEAT-A5-01: RS485 回环自测（一次性任务，跑完 vTaskDelete） ----
+ * 目的：验证 USART3(PD8/PD9)+MAX3485(EN=PD11) 自发自收通路（A5-01 AC）。
+ * 为何放 RTOS：HAL_UART_Receive 阻塞用 HAL_GetTick 超时，而裸机区
+ * （osKernelStart 前 BASEPRI=0x50）SysTick 被屏蔽 → 超时永不触发 → 死等
+ * （BUG-20260902-xxx，与 BUG-20260829-006 OLED HAL_Delay 同根；源：
+ *   ST Community tinyurl/peripheral-before-rtos；FreeRTOS FAQ cortex-m）。
+ * 与 paramTask 并发：本任务 High 优先级且先挂起 paramTask，独占 USART3
+ * 完成发→收，避免收帧被 paramTask 抢走。结果置标志由 SpecTask 打印。 */
+static void RS485LoopTask(void *argument)
+{
+  (void)argument;
+  uint8_t txbuf[] = "RS485_LOOP";
+  uint8_t rxbuf[16] = {0u};
+
+  /* 独占 USART3：挂起 paramTask，避免其抢占式收帧污染回环数据 */
+  osThreadSuspend(paramTaskHandle);
+
+  s_rs485_send_st = (int)RS485_Send(txbuf, sizeof(txbuf) - 1u);
+  s_rs485_recv_st = (int)RS485_Receive(rxbuf, sizeof(txbuf) - 1u);
+  if (s_rs485_recv_st == (int)HAL_OK) {
+    s_rs485_loop_match = (memcmp(txbuf, rxbuf, sizeof(txbuf) - 1u) == 0u);
+  } else {
+    s_rs485_loop_match = 0;
+  }
+
+  osThreadResume(paramTaskHandle);
+  s_rs485_loop_done = 100;   /* 置完成 → SpecTask 打印 */
+  vTaskDelete(NULL);         /* 一次性，自删 */
+}
+
+/* ---- FEAT-A4-04: 参数事件打印（由 SpecTask 主循环调用，打印后复位 -1） ----
+ * 格式供 §3.4/§3.5 记录（AC-01/AC-02/AC-03 判据行）：
+ *   PARAM set  id=0x01 th=800(8.00)        → 生效
+ *   PARAM rej  id=0x02 val=101 (out of 1..100) → 越界拒绝
+ *   PARAM rej  id=0x00 bad_frame           → 坏帧丢弃
+ * 与 ALARM 同规则：事件即时打印，不走 1s 节流（坑 1 沿用）。 */
+static void param_event_print(void)
+{
+  if (s_param_print == 1) {
+    printf("PARAM set  id=0x%02X val=%lu\r\n",
+           (unsigned)s_param_pid, (unsigned long)s_param_val);
+  } else if (s_param_print == 0) {
+    printf("PARAM rej  id=0x%02X val=%lu\r\n",
+           (unsigned)s_param_pid, (unsigned long)s_param_val);
+  }
+  s_param_print = -1;
 }
 
 /* ---- FEAT-A2-02: 频谱消费任务 ----
@@ -487,6 +669,21 @@ static void SpecTask(void *argument)
         printf("ALARM off n=%lu\r\n", (unsigned long)s_alarm_count);
       }
       s_prev_alarm = -1;   /* 复位标志，等待下次状态变化 */
+    }
+
+    /* FEAT-A4-04: 参数下发事件打印（paramTask 置位 → 本任务打印，USART1 单写者）。
+     * 与 ALARM 同规则：事件即时打印，不走 1s 节流。 */
+    param_event_print();
+
+    /* FEAT-A5-01: 回环自测结果打印（RS485LoopTask 置位 → 本任务打印，USART1 单写者）。
+     * 一次性：打印完置 -1 防重打。 */
+    if (s_rs485_loop_done == 100) {
+      printf("RS485_Send st=%d\r\n", s_rs485_send_st);
+      printf("RS485_Receive st=%d\r\n", s_rs485_recv_st);
+      printf("RS485_LOOP %s\r\n",
+             (s_rs485_recv_st == (int)HAL_OK && s_rs485_loop_match) ? "MATCH"
+                                                                    : "MISMATCH");
+      s_rs485_loop_done = -1;  /* 已打印，防重 */
     }
   }
 }

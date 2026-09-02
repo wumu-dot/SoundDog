@@ -86,6 +86,7 @@ BSP/mfcc_dct.c \
 BSP/model_normal.c \
 BSP/dist.c \
 BSP/debounce.c \
+BSP/param.c \
 Src/i2c.c \
 BSP/oled_drv.c \
 Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_i2c.c \

@@ -10,7 +10,13 @@
 - **父FEAT**：FEAT-A5-RS485通信
 - **优先级**：P1
 - **预估总耗时**：2h（父FEAT 预算 8h 内拆分）
-- **当前状态**：🔴未开始（傻瓜式操作单已备好；模块已到货：TTL-RS485(3.3V/SP3485)，引脚 **EN/VCC/A/B/GND×2/RXD/TXD** 已确认，EN=方向控制）
+- **当前状态**：🟡阶段4 排查中（回环时序坑已修复、单 EN 自发自收不可行已确认；待独立 USB-TTL 到货做双模块对端完整验证；详见 BUG-20260902-001）
+
+### 0.1 来源（R32：所有引用必须附可点击 URL）
+- **器件 Datasheet（SP3485/MAX3485，3.3V 半双工 RS-485 收发器，DE/`RE` 方向控制）**: [MAX3483/MAX3485.../MAX3491 — True RS-485/RS-422 Transceivers (Analog Devices 官方 PDF)](https://www.analog.com/media/en/technical-documentation/data-sheets/max3483-max3491.pdf)（`/RE` 低有效：`/RE` 为高时 RO 置高阻、接收禁用；半双工 75176 引脚兼容）
+- **2-wire RS-485 半双工自发自收不成立（回环须双模块对端）**: [Sealevel — loopback test with 2-wire RS-485](https://www.sealevel.com/how-do-i-perform-a-loopback-test-with-my-serial-adapter-configured-for-2-wire-rs-485/)（"When the serial port is transmitting, the receiver is disabled"... 需 support 'Echo'）
+- **回环放 osKernelStart 前死锁（HAL_UART_Receive 超时失效）**: [ST Community — Peripheral use before FreeRTOS Kernel Init makes the MCU to infinite loop](https://community.st.com/t5/stm32-mcu-products/peripheral-use-before-freertos-kernel-init-makes-the-mcu-to/m-p/572825)、[FreeRTOS Troubleshooting FAQ](https://research.freertos.org/Why-FreeRTOS/FAQs/Troubleshooting/)（调度器前调内核 API 永久关中断）
+- **ST HAL 驱动超时实现（`UART_WaitOnFlagUntilTimeout` 依赖 `HAL_GetTick`）**: [ST Community — FreeRTOS and HAL driver timeout issue](https://community.st.com/t5/stm32-mcu-products/freertos-and-hal-driver-timeout-issue/td-p/472338)
 
 ## 1. 总体目标与硬边界
 
@@ -108,20 +114,27 @@
 | 3 | RXD | PD8（USART3_TX） | ⚠️ 交叉：MCU 发 → 模块收 | ☐ |
 | 4 | TXD | PD9（USART3_RX） | ⚠️ 交叉：模块发 → MCU 收 | ☐ |
 | 5 | EN | PD11 | GPIO 方向控制：高=发送 / 低=接收 | ☐ |
-| 6 | A | A（回环测试：A-B 对接时接 B 端 A） | 本 FEAT 回环可暂不接 | ☐ |
-| 7 | B | B（同上） | 本 FEAT 回环可暂不接 | ☐ |
+| 6 | A | A（对接第二块 MAX3485 的 A） | 单 EN 模块自发自收不可行，须双模块对端（见 §3.2） | ☐ |
+| 7 | B | B（对接第二块 MAX3485 的 B） | 两端 GND 共地 | ☐ |
 
-> 回环说明：半双工自发自收需要 RS485 侧有回环路径（A-B 对接或模块内部回环）。若模块 A/B 悬空无法回环 → 用杜邦线将本模块 A 与 B 短接（或按 §3.2 步骤1 记录的模块手册方式）。
+> ⚠️ 回环方式更正（BUG-20260902-001）：**单 EN 模块（DE+`/RE` 同控一根）无法 A-B 短接自发自收**——发送时 DE=1 同时 `/RE=1`（禁收），RO 无输出；发完切接收态时数据已结束。故回环必须用**双模块对端**（板上模块 A/B ↔ 对端模块 A/B），详见 §3.2。
 
-### 3.2 回环验证（阶段 4 执行；半双工自发自收）
+### 3.2 回环验证（阶段 4 执行；**双模块对端**，非自发自收）
+> 单 EN 模块无法自发自收（BUG-20260902-001），回环改用**双模块对端**。
 1. 核对模块丝印：**EN / VCC / A / B / GND×2 / RXD / TXD**（记录：一致 / 差异说明：___）
-2. 烧录固件：运行 `firmware\build_and_flash.bat` → 期望 `wrote ... bytes` / `Verified OK`。
-3. 触发板端发送测试串（如 ASCII "RS485_LOOP"）：期望 USART3 RX 收到**相同内容**（自发自收）。
-   记录：发送内容：______；收到内容：______
-4. 连续发送 100 次：期望 100 次全部一致。记录：错误次数：___/100
-5. EN 型：发送前 EN(PD11)=1，发送完成（TC 标志）后 EN=0，期望方向切换正常。
+2. 接线（板上模块 → 对端模块，A-A/B-B/GND-GND 对接；对端模块 TTL 侧接独立 USB-TTL→PC）：
+   - 板上模块：RXD←PD8、TXD→PD9、EN←PD11、VCC→3.3V、GND→GND
+   - 对端模块：RXD←USB-TTL.TX、TXD→USB-TTL.RX、EN→对端控制（或恒收态 GND）、VCC→3.3V、GND→共地
+   - 两端 A↔A、B↔B、GND↔GND 对接
+3. 烧录固件：运行 `firmware\build_and_flash.bat` → 期望 `wrote ... bytes` / `Verified OK`。
+4. 触发板端发送测试串（如 ASCII "RS485_LOOP"）：期望 USB-TTL 对端串口收到**相同内容**。
+   记录：发送内容：______；对端收到内容：______
+5. 对端（USB-TTL）向板端发送：期望板上 USART3 收到，经 `RS485LoopTask` 回环打印识别。
+6. EN 型：发送前 EN(PD11)=1，发送完成（TC 标志）后 EN=0，期望方向切换正常。
    记录：方向切换是否正常：是 / 否
-6. ⚠️ 半双工红线：同一时刻只允许一端发送；EN 只在发送窗口拉高，空闲/接收恒为 0。
+7. ⚠️ 半双工红线：同一时刻只允许一端发送；EN 只在发送窗口拉高，空闲/接收恒为 0。
+
+> 时序坑提示：回环若放在 `main.c` `osKernelStart()` 前会死锁（BUG-20260902-001 根因①）。当前回环已移入 RTOS 任务 `RS485LoopTask`（一次性、跑完自删、结果由 SpecTask 打印），可复用。
 
 ### 3.3 半双工方向验证（EN 型补充）
 1. 空闲态量 PD11 电压：期望 ≈0V（接收态）。记录数值：______
@@ -132,7 +145,8 @@
 |------|---------|------|
 | 完全无回环数据 | RXD/TXD 接反 / EN 未接或接反 / 波特率不对 | 核对 §3.1 表；波特率 115200；确认 PD11 已接 EN |
 | 收到乱码 | 波特率不符 / 杜邦线接触不良 / 未共地 | 改 115200；重插线；确认 GND 共地 |
-| 回环无数据且 A/B 悬空 | 差分侧无回环路径 | A-B 短接（或按模块手册回环方式）后重试 |
+| 回环无数据且 A/B 悬空 | 差分侧无回环路径 | 改用双模块对端（A-A/B-B/GND-GND 对接，非 A-B 短接） |
+| 单模块 A-B 短接自发自收 st=3 | 单 EN 模块发送态禁收（BUG-20260902-001） | 物理不可行，勿再试；改用双模块对端 |
 | 发送后收不到回环 | 发送完成未切回接收态（EN 恒高） | 确认 TC 标志后 EN=0 |
 | 编译失败/链接失败 | Makefile 漏加源文件（BUG-002 教训） | `Makefile` C_SOURCES 补 rs485 源文件后重编 |
 | 烧录连不上 | ST-Link 四线/驱动 | 查 A1-02 §3.1 兜底：`firmware\flash_isp.bat`（BOOT0+USART1） |
@@ -185,3 +199,4 @@
 | 2026-08-16 | 阶段1 准备 | Dev Agent | 模块丝印已核对（EN/VCC/A/B/GND×2/RXD/TXD）；`soundDog.ioc` 确认无 USART3（外设=DMA/FREERTOS/I2S3/NVIC/RCC/SYS/USART1）；影响范围：ioc/usart.c/h/新增rs485_drv/Makefile/接线，EN(PD11) 初始必须为低 | 无（RS485 模块已到货，可进阶段2设计；接线测试待模块到手） |
 | 2026-08-16 | 阶段2 设计 | Dev Agent | 定案手写 HAL（不动 ioc）：huart3 照 huart1 模式，PD8/PD9=AF7、`__HAL_RCC_USART3/GPIO_D` 时钟；EN(PD11) 推挽初始低；时序=发送前 EN=1→等TC→EN=0，空闲恒0；接口 RS485_Init/SetDirTx/SetDirRx/Send/Receive | 无 |
 | 2026-08-16 | 阶段3 实现 | Dev Agent | 已写：usart.c（huart3+MX_USART3_UART_Init+MspInit/MspDeInit USART3 分支）、usart.h、rs485_drv.c/.h、Makefile C_SOURCES、main.c（MX_USART3_UART_Init+RS485_Init+回环自测打印）；`build.bat` 通过（[ OK ] Build OK，零警告） | 无（首次编译漏 include usart.h，已修复） |
+| 2026-09-02 | 阶段4 排查 | Dev Agent | 回环实测：RS485_Send st=0 / RS485_Receive st=3（HAL_TIMEOUT）。定位双根因（BUG-20260902-001）：①回环放 osKernelStart 前，BASEPRI=0x50 屏蔽 SysTick → HAL_UART_Receive 超时永不触发 → 死锁（与 BUG-006 同根）；已把回环移入 RTOS 任务 RS485LoopTask 修复。②单 EN 模块（DE+/RE 同控）无法 A-B 短接自发自收，物理不可行；st=3 属预期。回环方案改为双模块对端（§3.2 更新）。 | 根因②需独立 USB-TTL（CH340G 在途）做双模块对端完整验证 |

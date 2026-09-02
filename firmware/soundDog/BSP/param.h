@@ -29,6 +29,7 @@ extern "C" {
 #endif
 
 /* ---- 帧布局（固定 8 字节，§1.4c，禁止自造） ---- */
+#define PARAM_HEADER        0xA5u   /* 帧头（§1.4c 固定帧长定界，无独立帧尾） */
 #define PARAM_FRAME_LEN     8u
 #define PARAM_ADDR          0x01u   /* 本设备地址 */
 #define PARAM_CMD_WRITE     0x21u   /* 写单一参数 */
@@ -63,13 +64,19 @@ uint16_t param_get_win_len(void);        /* 滑窗长（固定 100） */
 uint16_t param_get_win_anom(void);       /* 窗内异常帧阈值 */
 uint32_t param_get_bad_frame_cnt(void);  /* 坏帧丢弃计数（诊断/评审） */
 
+/* 最近一次「完整合法帧」解析出的 参数 ID / 值（打印事件用）。
+ * 合法帧(生效)与越界拒绝(未生效)都会更新二者（freertos 分别打印 set/rej 值）；
+ * 坏帧（帧头/地址/命令/CRC 错）不更新。 */
+uint8_t  param_last_pid(void);
+uint16_t param_last_val(void);
+
 /* 逐字节喂入帧解析状态机，返回本字节是否闭合一帧（成功/坏帧/越界）。
  * 处理器代：must re-in Args onFrame/onDrop callbacks（见实现注释第 2 行）。
  * 非重入；仅 paramTask 单消费者调用（同 debounce/mel 单消费者约定）。 */
 param_rx_t param_feed_byte(uint8_t byte);
 
-/* 内部实现所需的生效回调（由调用方 freertos.c 通过 setter 注入，避免把
- * debounce 强耦合进 param 模块——param 只解析协议，实际 apply 由 debounce_set_params 做）。
+/* 生效回调（由调用方 freertos.c 定义，param.c 编译期符号链接调用，免 debounce 编进 param
+ * 模块——param 只解析协议，实际 apply 由 freertos.c 调 debounce_set_params 做）。
  * 返回 true=本次应用成功；伪=范围校验失败（调用方应据此计数越界拒绝）。 */
 bool param_apply(uint8_t pid, uint16_t value);
 

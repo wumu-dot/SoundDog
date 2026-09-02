@@ -43,6 +43,25 @@ extern "C" {
  * 防未来改宏/改类型静默破坏溢出防御）。同 freertos.c _Static_assert 惯例。 */
 _Static_assert(DB_COUNT_CAP <= 0xFFFFu, "DB_COUNT_CAP must fit uint16_t counter");
 
+/* ---- A4-04：运行期可调参数（FEAT-A4-04 §1.4a/§1.4b，默认=上方宏，可在线覆盖） ----
+ * 滑窗长度 DB_WIN_LEN 不纳入结构体：与位图容量 DB_BITMAP_WORDS 编译期@100 耦合
+ * （坑 2 / 影响①），固定=100 拒改 → 仅经宏固定，运行期不可变。 */
+typedef struct {
+  float    threshold;            /* 异常阈值（d_min > threshold 判异；默认 DB_THRESHOLD=6.0f） */
+  uint16_t consec_anom_alarm;    /* 轨1：连续异常帧数 → 报警（默认 30） */
+  uint16_t consec_norm_release;  /* 解除：连续正常帧数 → 解除（默认 60） */
+  uint16_t win_anom_cnt;         /* 轨2：滑窗内异常帧数 ≥ 此值 → 报警（默认 30） */
+} debounce_param_t;
+
+/* 读当前运行期参数（A4-04：threshold 供 mel_frame_cb 阈值比较实时读取）。
+ * 返回「副本」（内部临界区拷贝），调用方直接读返回结构体字段即可。
+ * 并发安全：内部 portENTER/EXIT_CRITICAL，屏蔽 paramTask 整体赋值撕裂。 */
+debounce_param_t debounce_get_param(void);
+
+/* 覆盖整组运行期参数（A4-04 param_apply 经此生效；未调用则恒为宏默认 → 行为与 A4-03 一致）。
+ * p 为 NULL 时忽略。调用方须先经参数范围校验，本接口只做整组替换（无逐字段校验）。 */
+void debounce_set_params(const debounce_param_t *p);
+
 /* ---- 状态 ---- */
 typedef enum {
   DB_NORMAL = 0,   /* 正常态（未报警） */

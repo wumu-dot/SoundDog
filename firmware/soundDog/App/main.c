@@ -239,12 +239,14 @@ HAL_StatusTypeDef ret = I2S_DRV_Init(&hi2s3, audio_frame_cb);
 printf("I2S_DRV_Init ret=%d (0=HAL_OK)\r\n", ret);
 
 /* A5-01: USART3 + RS485 初始化 */
-    MX_USART3_UART_Init();
-    RS485_Init();
+  MX_USART3_UART_Init();
+  RS485_Init();
 
-#if 0   /* 回环自测（A5-01 排查未完，暂关；排查时改回 1）
-         * 现状：st=3（HAL_TIMEOUT），接收不到自己的发送。
-         * 开启时每次 boot 额外阻塞 ~200ms（收发各 100ms 超时）。 */
+#if 0   /* 回环自测已移入 freertos.c RS485LoopTask（BUG-20260902-001）
+         * ⚠️ 不能再放这里：本区在 osKernelStart 前、BASEPRI=0x50，
+         * SysTick 被 FreeRTOS 屏蔽 → HAL_UART_Receive 的 HAL_GetTick 超时
+         * 永不触发 → 死等卡死（与 BUG-20260829-006 OLED HAL_Delay 同根）。
+         * 移入 RTOS 任务后 HAL_UART_Receive 超时才有效。 */
     {
       uint8_t txbuf[] = "RS485_LOOP";
       uint8_t rxbuf[16] = {0};

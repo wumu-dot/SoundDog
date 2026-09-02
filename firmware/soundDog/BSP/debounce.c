@@ -14,6 +14,15 @@
  *   静态初始化=0 → 上电/看门狗复位自动回到 DB_NORMAL，计数清零（坑 4）。
  */
 #include "debounce.h"
+#include "FreeRTOS.h"   /* portENTER_CRITICAL/portEXIT_CRITICAL（A4-04 并发保护） */
+
+/* ---- A4-04 运行期参数（默认 = 宏默认，经 debounce_set_params 在线覆盖） ---- */
+static debounce_param_t s_param = {
+  .threshold           = DB_THRESHOLD,
+  .consec_anom_alarm   = DB_CONSEC_ANOM_ALARM,
+  .consec_norm_release = DB_CONSEC_NORM_RELEASE,
+  .win_anom_cnt        = DB_WIN_ANOM_CNT,
+};
 
 /* ---- 内部状态（静态 → 上电/看门狗复位自动清零，坑 4） ---- */
 static db_state_t s_state = DB_NORMAL;
@@ -87,10 +96,11 @@ int debounce_process(bool frame_is_anomaly, int *alarm_changed,
     /* 轨2：滑窗更新（每帧都入窗，正常帧位=0） */
     db_win_push(frame_is_anomaly);
 
-    /* 双轨 OR 判据（先到先报；同帧双满足 → 轨1 优先，count=其触发帧数） */
-    if (s_consec_anom >= DB_CONSEC_ANOM_ALARM ||
-        s_win_anom >= DB_WIN_ANOM_CNT) {
-      if (s_consec_anom >= DB_CONSEC_ANOM_ALARM) {
+    /* 双轨 OR 判据（先到先报；同帧双满足 → 轨1 优先，count=其触发帧数）。
+     * A4-04：判据阈值改为读运行期参数 s_param（默认=宏，行为与 A4-03 一致）。 */
+    if (s_consec_anom >= s_param.consec_anom_alarm ||
+        s_win_anom >= s_param.win_anom_cnt) {
+      if (s_consec_anom >= s_param.consec_anom_alarm) {
         src = (int)DB_SRC_CONSEC;
         count = s_consec_anom;               /* =30（触发阈值） */
       } else {
@@ -114,7 +124,7 @@ int debounce_process(bool frame_is_anomaly, int *alarm_changed,
     /* 滑窗仍持续维护（保持状态一致性；报警态内不用于触发，仅保持满窗） */
     db_win_push(frame_is_anomaly);
 
-    if (s_consec_norm >= DB_CONSEC_NORM_RELEASE) {
+    if (s_consec_norm >= s_param.consec_norm_release) {
       src = (int)DB_SRC_NONE;                /* 解除事件来源=NONE */
       count = s_consec_norm;                 /* =60（解除阈值） */
       s_state = DB_NORMAL;
@@ -141,4 +151,29 @@ int debounce_process(bool frame_is_anomaly, int *alarm_changed,
     *alarm_count = count;
   }
   return (int)s_state;
+}
+
+/* ---- A4-04：运行期参数读写（默认=宏，见文件头 s_param） ----
+ * 并发安全（审查项3）：specTask(mel_frame_cb) 读 + paramTask(param_apply) 写，
+ * 跨任务共享。读写各包临界区防撕裂；getter 返回「副本」而非内部指针，
+ * 避免调用方持指针期间被 paramTask 改写读到一半（float threshold + 3×uint16）。
+ * 临界区开销可忽略：一次拷贝 ~16B，周期级。 */
+
+debounce_param_t debounce_get_param(void)
+{
+  debounce_param_t p;
+  portENTER_CRITICAL();
+  p = s_param;
+  portEXIT_CRITICAL();
+  return p;
+}
+
+void debounce_set_params(const debounce_param_t *p)
+{
+  if (!p) {
+    return;
+  }
+  portENTER_CRITICAL();
+  s_param = *p;
+  portEXIT_CRITICAL();
 }
