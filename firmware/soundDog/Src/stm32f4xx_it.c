@@ -22,6 +22,7 @@
 #include "stm32f4xx_it.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "port.h"   /* A4-04 Modbus：prvvUART*ISR 从站串口 ISR 入口声明 */
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -58,6 +59,7 @@
 extern DMA_HandleTypeDef hdma_spi3_rx;
 extern TIM_HandleTypeDef htim7;
 extern I2S_HandleTypeDef hi2s3;
+extern UART_HandleTypeDef huart3;   /* A4-04 Modbus：USART3（RS485） */
 
 /* USER CODE BEGIN EV */
 
@@ -213,6 +215,43 @@ void SPI3_IRQHandler(void)
   if (__HAL_I2S_GET_FLAG(&hi2s3, I2S_FLAG_OVR)) {
     __HAL_I2S_CLEAR_OVRFLAG(&hi2s3);
   }
+}
+
+/**
+ * @brief A4-04 Modbus：USART3（RS485）中断入口。
+ *
+ * 实现忠实于 quanghona/Freemodbus-CMSIS-RTOS2-STM32 的 Core/Src/stm32f4xx_it.c
+ * （R27/R32，本工程电参数不变，仅复用其代码形态）：
+ *   - RXNE：收单字节 → prvvUARTRxReceiveCharISR（写入 portserial 环形缓冲）；
+ *   - IDLE：总线空闲=帧尾 → prvvUARTRxISR（置位，唤醒收帧线程 drain）；
+ *   - TC：  发送完成 → prvvUARTTxReadyISR（推动协议栈继续发下一字节）；
+ *   - ORE： 溢出清标记防卡死；
+ *   - 末尾仍调 HAL_UART_IRQHandler：喂 HAL_UART_Transmit_IT 的 TXE 内部状态机
+ *     （quanghona 关键约定——PutByte 走 HAL_IT，TXE 必须经 HAL 驱动才能续传）。
+ */
+void USART3_IRQHandler(void)
+{
+  if (__HAL_UART_GET_FLAG(&huart3, UART_FLAG_RXNE))
+  {
+    prvvUARTRxReceiveCharISR((CHAR)(huart3.Instance->DR & 0xFF));
+    __HAL_UART_CLEAR_FLAG(&huart3, UART_FLAG_RXNE);
+  }
+  if (__HAL_UART_GET_FLAG(&huart3, UART_FLAG_IDLE))
+  {
+    prvvUARTRxISR();
+    __HAL_UART_CLEAR_IDLEFLAG(&huart3);
+  }
+  if (__HAL_UART_GET_FLAG(&huart3, UART_FLAG_TC))
+  {
+    prvvUARTTxReadyISR();
+    __HAL_UART_CLEAR_FLAG(&huart3, UART_FLAG_TC);
+  }
+  if (__HAL_UART_GET_FLAG(&huart3, UART_FLAG_ORE))
+  {
+    (void)(huart3.Instance->DR & 0x01FF);   /* 读 DR 清 ORE（复用 quanghona 兜底） */
+    __HAL_UART_CLEAR_OREFLAG(&huart3);
+  }
+  HAL_UART_IRQHandler(&huart3);
 }
 
 /* USER CODE BEGIN 1 */

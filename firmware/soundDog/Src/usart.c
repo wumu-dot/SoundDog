@@ -113,6 +113,12 @@ void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
     HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
     HAL_GPIO_WritePin(GPIOD, GPIO_PIN_11, GPIO_PIN_RESET);
 
+    /* A4-04 Modbus：使能 USART3 全局中断（NVIC）。
+     * 中断优先级低于音频 DMA（不抢占音频），仅跳线 USART3 用（RS485）。
+     * 入口见 stm32f4xx_it.c:USART3_IRQHandler（quanghona FreeModbus 形态）。 */
+    HAL_NVIC_SetPriority(USART3_IRQn, 5, 0);
+    HAL_NVIC_EnableIRQ(USART3_IRQn);
+
   /* USER CODE BEGIN USART3_MspInit 1 */
 
   /* USER CODE END USART3_MspInit 1 */

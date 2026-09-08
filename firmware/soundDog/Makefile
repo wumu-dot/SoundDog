@@ -86,7 +86,21 @@ BSP/mfcc_dct.c \
 BSP/model_normal.c \
 BSP/dist.c \
 BSP/debounce.c \
-BSP/param.c \
+App/modbus_app.c \
+Middlewares/Third_Party/FreeModbus/modbus/mb.c \
+Middlewares/Third_Party/FreeModbus/modbus/rtu/mbrtu.c \
+Middlewares/Third_Party/FreeModbus/modbus/rtu/mbcrc.c \
+Middlewares/Third_Party/FreeModbus/modbus/functions/mbfunccoils.c \
+Middlewares/Third_Party/FreeModbus/modbus/functions/mbfuncdiag.c \
+Middlewares/Third_Party/FreeModbus/modbus/functions/mbfuncdisc.c \
+Middlewares/Third_Party/FreeModbus/modbus/functions/mbfuncholding.c \
+Middlewares/Third_Party/FreeModbus/modbus/functions/mbfuncinput.c \
+Middlewares/Third_Party/FreeModbus/modbus/functions/mbfuncother.c \
+Middlewares/Third_Party/FreeModbus/modbus/functions/mbutils.c \
+Middlewares/Third_Party/FreeModbus/port/cmsis_rtos2/portserial.c \
+Middlewares/Third_Party/FreeModbus/port/cmsis_rtos2/porttimer.c \
+Middlewares/Third_Party/FreeModbus/port/cmsis_rtos2/portevent.c \
+Middlewares/Third_Party/FreeModbus/port/cmsis_rtos2/portcritical.c \
 Src/i2c.c \
 BSP/oled_drv.c \
 Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_i2c.c \
@@ -193,7 +207,10 @@ C_INCLUDES =  \
 -IMiddlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F \
 -IDrivers/CMSIS/Device/ST/STM32F4xx/Include \
 -IDrivers/CMSIS/Include \
--I../cmsis-dsp/repo/Include
+-I../cmsis-dsp/repo/Include \
+-IMiddlewares/Third_Party/FreeModbus/modbus/include \
+-IMiddlewares/Third_Party/FreeModbus/modbus/rtu \
+-IMiddlewares/Third_Party/FreeModbus/port
 
 
 # compile gcc flags
