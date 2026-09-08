@@ -22,6 +22,7 @@
   官方样例来源：modbus.org spec RTU 帧格式 + docs.chipkin.com Modbus CRC & LRC 排错。
 """
 import sys
+import time
 try:
     import crcmod
     _CRCMOD = crcmod.mkCrcFun(0x18005, rev=True, initCrc=0xFFFF, xorOut=0x0000)
@@ -62,6 +63,107 @@ CASES = [
     (0x0005, 30,     "RTU 0x0005 窗内触发帧 30 (默认值下发)"),
 ]
 
+READ_ORDER = ["TH(x100)", "触发帧", "解除帧", "滑窗", "窗内触发"]  # -> 0x0001..0x0005
+
+# 越界用例：用于验证异常应答（另构造，不入 CASES 正常下发列表）
+BAD_CASES = [
+    (0x0001, 0x0032, "越界 TH=0.5(<1.0) 期望异常0x02"),
+    (0x0001, 0x0FA0, "越界 TH=25.0(>20.0) 期望异常0x02"),
+    (0x0004, 200,    "越界 滑窗=200(!=100) 期望异常0x02"),
+]
+
+
+def classify_write_response(resp, frame):
+    """FC06 写应答分类：正常写=回显原帧；越界/地址错=异常帧(0x86 + 异常码)。"""
+    if not resp:
+        return "无应答（链路不通 / 地址不符 / 静默超时）"
+    if bytes(resp[:len(frame)]) == bytes(frame):
+        return "OK 已生效（回显原帧）"
+    if len(resp) >= 3 and resp[1] == (FC_WRITE_SINGLE | 0x80):
+        code = resp[2]
+        return ("异常0x%02X（%s）" % (code, "MB_ENOREG 越界拒绝" if code == 0x02 else "其他"))
+    return "未知应答: %s" % resp.hex(" ").upper()
+
+
+def send_and_read(port, baud=115200):
+    """--com 模式：逐帧下发并回读板端应答（验证链路/生效/越界，§3.4/§3.5）。
+
+    依赖：USB转RS485 一体适配器（自动方向），A/B/GND 直连板上 MAX3485#1。
+    判据：
+      正常写 -> 应答=回显原帧（FC06 回显）
+      越界写 -> 应答=异常帧 01 86 02 <CRC>（MB_ENOREG，全保留旧值）
+    从站地址 0x01 / 115200 8N1。
+    """
+    try:
+        import serial
+    except ImportError:
+        print("[ERR] 未安装 pyserial：pip install pyserial"); return 2
+    ser = serial.Serial(port, baud, timeout=0.3,
+                        parity=serial.PARITY_NONE,
+                        bytesize=8, stopbits=1)
+    print(f"\n=== {port}@{baud} 下发并回读（Modbus RTU） ===")
+    try:
+        # 1) 正常下发用例（§3.4）
+        print("-- 正常下发 --")
+        for reg, val, name in CASES:
+            frame = make_write_frame(reg, val)
+            ser.reset_input_buffer()
+            ser.write(bytes(frame))
+            time.sleep(0.06)            # 从站处理 + RTU 应答窗口
+            resp = ser.read(64)
+            print(f"[{name}]  发={frame.hex(' ').upper()}")
+            print(f"          应答={resp.hex(' ').upper()}  -> {classify_write_response(resp, frame)}")
+            time.sleep(0.4)
+
+        # 2) 越界用例（§3.5 ①②，期望异常）
+        print("-- 越界用例（期望异常 0x02） --")
+        for reg, val, name in BAD_CASES:
+            frame = make_write_frame(reg, val)
+            ser.reset_input_buffer()
+            ser.write(bytes(frame))
+            time.sleep(0.06)
+            resp = ser.read(64)
+            print(f"[{name}]  发={frame.hex(' ').upper()}")
+            print(f"          应答={resp.hex(' ').upper()}  -> {classify_write_response(resp, frame)}")
+            time.sleep(0.4)
+
+        # 3) 读回快照（FC03 读 0x0001..0x0005，验证读路径 + 生效值）
+        print("-- 读保持寄存器快照（FC03） --")
+        body = bytes([SLAVE_ADDR, 0x03, 0x00, 0x01, 0x00, 0x05])
+        c = crc16_modbus(body)
+        frame = bytearray(body + bytes([c & 0xFF, (c >> 8) & 0xFF]))
+        ser.reset_input_buffer()
+        ser.write(bytes(frame))
+        time.sleep(0.06)
+        resp = ser.read(64)
+        if len(resp) >= 5 and resp[1] == 0x03 and resp[2] == 10:
+            regs = [(resp[3 + 2 * i] << 8) | resp[4 + 2 * i] for i in range(5)]
+            print(f"  读帧   ={frame.hex(' ').upper()}")
+            print(f"  应答   ={resp.hex(' ').upper()}")
+            for nme, v in zip(READ_ORDER, regs):
+                print(f"   {nme:>8} = {v}")
+        else:
+            print(f"  读帧   ={frame.hex(' ').upper()}")
+            print(f"  应答   ={resp.hex(' ').upper()}  -> 非预期（读路径可能未通）")
+    finally:
+        ser.close()
+    return 0
+
+
+def main(argv):
+    if "--com" in argv:
+        i = argv.index("--com")
+        port = argv[i + 1] if i + 1 < len(argv) else None
+        if not port:
+            print("[ERR] 用法: python gen_param_frames.py --com COMx [--baud 115200]")
+            return 2
+        baud = 115200
+        if "--baud" in argv:
+            bj = argv.index("--baud")
+            baud = int(argv[bj + 1])
+        return send_and_read(port, baud)
+    return 0
+
 FAIL = 0
 # 官方样例锁：`01 03 00 00 00 01` -> CRC 0x0A84 -> 帧尾 `84 0A`（小端）
 m1 = crc16_modbus(bytes([0x01, 0x03, 0x00, 0x00, 0x00, 0x01]))
@@ -90,5 +192,9 @@ for reg, cnt, name in read_frames:
     f = bytearray(body + bytes([c & 0xFF, (c >> 8) & 0xFF]))
     print(f"[{name}]  帧={f.hex(' ').upper()}")
 
-if FAIL:
-    sys.exit(1)
+if __name__ == "__main__":
+    _rc = main(sys.argv[1:])
+    if FAIL:
+        sys.exit(1)
+    if _rc:
+        sys.exit(_rc)
