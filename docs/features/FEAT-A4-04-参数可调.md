@@ -26,14 +26,14 @@
 
 - **协议**：**Modbus RTU 从站**（FreeModbus），**废弃原 0xA5/0x5A 私有帧**。用成熟方案而非自造协议（R27/R32）。
 
-- **数据流**：PC(Modbus Master) → USB转RS485适配器 → A/B 差分 → 板上 MAX3485#1 → TTL → STM32 USART3(PD8/PD9) → FreeModbus 栈 → `eMBRegHoldingCB`(modbus_app.c) → `param_apply`(freertos.c，校验单一源) → `debounce_set_params` → debounce 状态机。
+- **数据流**：PC(Modbus Master) → USB转RS485适配器 → A/B 差分 → 板上 MAX3485#1 → TTL → STM32 USART3(PD8/PD9) → FreeModbus 栈 → `eMBRegHoldingCB`(modbus\_app.c) → `param_apply`(freertos.c，校验单一源) → `debounce_set_params` → debounce 状态机。
 
 - **链路参数**：从站地址 `0x01`、USART3 `115200`、`8N1`、Modbus RTU（静默超时定帧，无帧头/帧尾）。
 
-- **寄存器映射（保持寄存器 1 基址，与 modbus_app.c `reg_off_to_pid` 一一对应，禁止自造）**：
+- **寄存器映射（保持寄存器 1 基址，与 modbus\_app.c** **`reg_off_to_pid`** **一一对应，禁止自造）**：
 
-  | RTU地址 | 参数ID | 名称       | 默认值 | 范围                    | 传输格式                        |
-  | ---- | ---- | -------- | --- | --------------------- | --------------------------- |
+  | RTU地址  | 参数ID | 名称       | 默认值 | 范围                    | 传输格式                        |
+  | ------ | ---- | -------- | --- | --------------------- | --------------------------- |
   | 0x0001 | 0x01 | 阈值 TH    | 6.0 | 1.0\~20.0             | `uint16_t` 定点 ×100（600=6.0） |
   | 0x0002 | 0x02 | 触发连续帧 30 | 30  | 1\~100                | `uint16_t`                  |
   | 0x0003 | 0x03 | 解除连续帧 60 | 60  | 1\~100                | `uint16_t`                  |
@@ -50,20 +50,20 @@
 
 ### 1.4b 影响范围与风险（readonly 代码实测 + 编译证据）
 
-| 文件                                     | 改动                                                                  | 影响                                    |
-| -------------------------------------- | ------------------------------------------------------------------- | ------------------------------------- |
-| `Middlewares/Third_Party/FreeModbus/`（新增） | quanghona 仓库协议栈 core + portserial/porttimer/portevent/portcritical（port 适配 USART3/RS485） | 复用成熟栈，port 层本地化                |
-| `App/modbus_app.c/h`（新增）              | 保持寄存器读写回调（0x0001\~0x0005）→ `param_apply`                  | 参数访问单一入口，读快照/写两遍校验           |
-| `App/freertos.c`                        | 删 paramTask/RS485LoopTask；新增 MBSlavePollTask（eMBInit→eMBEnable→eMBPoll）+ `param_apply` 定义 | 不碰 specTask 关键路径                  |
-| `BSP/param.h`                           | 保留参数ID/范围宏 + `param_apply`（校验单一源）；废弃 0xA5 帧接口        | A4-03 逻辑不变                         |
-| `Src/stm32f4xx_it.c`                    | 新增 `USART3_IRQHandler`（RXNE/IDLE/TC/ORE + HAL_UART_IRQHandler）   | 供 FreeModbus portserial 中断收/发        |
-| `Src/usart.c`                           | USART3 NVIC 使能（收中断关发送中断，UltraLong 收字节型）                | 半双工方向由 portserial 控 DE(PD11)       |
-| Makefile                                | C\_SOURCES 收录 FreeModbus 源 + modbus_app.c；C\_INCLUDES 加头路径；移除 param.c | 防链接失败（BUG-002 教训）               |
-| `scripts/gen_param_frames.py`           | 0xA5 帧 → Modbus RTU 帧（FC03/FC06）+ crcmod 官方样例锁               | PC 端测试帧与板端一致                    |
+| 文件                                        | 改动                                                                                        | 影响                            |
+| ----------------------------------------- | ----------------------------------------------------------------------------------------- | ----------------------------- |
+| `Middlewares/Third_Party/FreeModbus/`（新增） | quanghona 仓库协议栈 core + portserial/porttimer/portevent/portcritical（port 适配 USART3/RS485）  | 复用成熟栈，port 层本地化               |
+| `App/modbus_app.c/h`（新增）                  | 保持寄存器读写回调（0x0001\~0x0005）→ `param_apply`                                                  | 参数访问单一入口，读快照/写两遍校验            |
+| `App/freertos.c`                          | 删 paramTask/RS485LoopTask；新增 MBSlavePollTask（eMBInit→eMBEnable→eMBPoll）+ `param_apply` 定义 | 不碰 specTask 关键路径              |
+| `BSP/param.h`                             | 保留参数ID/范围宏 + `param_apply`（校验单一源）；废弃 0xA5 帧接口                                             | A4-03 逻辑不变                    |
+| `Src/stm32f4xx_it.c`                      | 新增 `USART3_IRQHandler`（RXNE/IDLE/TC/ORE + HAL\_UART\_IRQHandler）                          | 供 FreeModbus portserial 中断收/发 |
+| `Src/usart.c`                             | USART3 NVIC 使能（收中断关发送中断，UltraLong 收字节型）                                                   | 半双工方向由 portserial 控 DE(PD11)  |
+| Makefile                                  | C\_SOURCES 收录 FreeModbus 源 + modbus\_app.c；C\_INCLUDES 加头路径；移除 param.c                    | 防链接失败（BUG-002 教训）             |
+| `scripts/gen_param_frames.py`             | 0xA5 帧 → Modbus RTU 帧（FC03/FC06）+ crcmod 官方样例锁                                            | PC 端测试帧与板端一致                  |
 
 **主动预警（过程问题 + 对策）**：
 
-- ① 位图容量耦合：滑窗改大越界 → **滑窗 RTU 0x0004 拒改**（reg_is_valid 要求严格=100）+ 位图按最大预留。
+- ① 位图容量耦合：滑窗改大越界 → **滑窗 RTU 0x0004 拒改**（reg\_is\_valid 要求严格=100）+ 位图按最大预留。
 
 - ② 宏→变量回归风险：默认值=编译期值，下线默认、零行为变化；烧录后回归 30/60 防抖（AC-12）。
 
@@ -77,12 +77,16 @@
 
 ### 1.4c 傻瓜式操作单（照做即可）
 
-#### Modbus 帧（PC 端用 pyserial + gen_param_frames.py 生成，禁止手算 CRC）
+#### Modbus 帧（PC 端用 pyserial + gen\_param\_frames.py 生成，禁止手算 CRC）
 
 - **写单参数**（FC06，8 字节）：`01 06 HHHL VVVV CCCL`
+
   - 字节0 `0x01` 从站地址；字节1 `0x06` 功能码写单寄存器
+
   - 字节2=寄存器地址高、字节3=低（大端）；字节4=值高、字节5=值低（大端）
+
   - 字节6=CRC16 低（小端先发）、字节7=CRC16 高
+
   - 例：TH=8.0(800=0x0320) → 地址 0x0001 → 帧 `01 06 00 01 03 20 D9 22`（`gen_param_frames.py` 输出，crcmod 已验）
 
 - **读保持寄存器**（FC03）：`01 03 HHHL CCNC CLLC` → 应答帧读 5 寄存器回快照。
@@ -91,7 +95,7 @@
 
 ##### 协议来源（2026-09-08 实采，可点击验证，禁止口头声称）
 
-- **FreeModbus 栈**（本工程采用、与 STM32F407+CMSIS-RTOS2+GCC 环境匹配）：[quanghona/Freemodbus-CMSIS-RTOS2-STM32](https://github.com/quanghona/Freemodbus-CMSIS-RTOS2-STM32)（portserial.c 收帧 put_index bug 已修；RS485 宏对齐 PD11；仅用 Modbus slave，master 关 `MB_MASTER_RTU_ENABLED=0`）。
+- **FreeModbus 栈**（本工程采用、与 STM32F407+CMSIS-RTOS2+GCC 环境匹配）：[quanghona/Freemodbus-CMSIS-RTOS2-STM32](https://github.com/quanghona/Freemodbus-CMSIS-RTOS2-STM32)（portserial.c 收帧 put\_index bug 已修；RS485 宏对齐 PD11；仅用 Modbus slave，master 关 `MB_MASTER_RTU_ENABLED=0`）。
 
 - **Modbus RTU 规范**（帧格式 + CRC16 多项式/初值/字节序）：官方 [modbus.org Modbus Protocol Access Guide](https://modbus.org/docs/Modbus_Application_Protocol_V1_1b3.pdf) 与 [docs.chipkin.com Modbus CRC & LRC 排错](https://docs.chipkin.com/articles/modbus-crc-lrc-error-checking-and-troubleshooting/)（官方样例 `01 03 00 00 00 01`→CRC `0x0A84`→帧尾 `84 0A`，CRC 小端）。
 
@@ -107,7 +111,7 @@
 
 #### 3.2 RS485 接线（全程断电）
 
-1. 板上 MAX3485#1：A/B/GND 引出；**RXD→PD8(USART3_TX)、TXD→PD9(USART3_RX)、EN←PD11**（GPIO 型，高=发/低=收，由 portserial 控制）。
+1. 板上 MAX3485#1：A/B/GND 引出；**RXD→PD8(USART3\_TX)、TXD→PD9(USART3\_RX)、EN←PD11**（GPIO 型，高=发/低=收，由 portserial 控制）。
 2. PC 端 **USB转RS485 一体适配器**（CH343/CP2102，自动方向）→ A/A、B/B、GND 与板端 A/B/GND 对接（**共地**）。
 3. 上电前核对 A/B 与电源（记录：\_\_\_\_\_\_）。
 
@@ -125,22 +129,22 @@
 
 #### 3.5 越界与坏帧用例
 
-| 用例 | 操作                | 期望              | 实际          |
-| -- | ----------------- | --------------- | ----------- |
-| ①  | 下发 TH=0.5（<1.0）   | 拒绝，保留旧值（TH 不回退） | 行为：\_\_\_   |
-| ②  | 下发 TH=25.0（>20.0） | 拒绝保留旧值          | 行为：\_\_\_   |
+| 用例 | 操作                | 期望                  | 实际          |
+| -- | ----------------- | ------------------- | ----------- |
+| ①  | 下发 TH=0.5（<1.0）   | 拒绝，保留旧值（TH 不回退）     | 行为：\_\_\_   |
+| ②  | 下发 TH=25.0（>20.0） | 拒绝保留旧值              | 行为：\_\_\_   |
 | ③  | 从站地址错/CRC16 错     | FreeModbus 丢弃，无异常应答 | 是否丢弃：\_\_\_ |
-| ④  | 组合写中一寄存越界         | 整帧拒绝(异常0x02)，全保留旧值 | 是否拒绝：\_\_\_ |
+| ④  | 组合写中一寄存越界         | 整帧拒绝(异常0x02)，全保留旧值  | 是否拒绝：\_\_\_ |
 
 #### 3.6 故障速查表
 
-| 现象     | 原因                | 处理                         |
-| ------ | ----------------- | -------------------------- |
-| 回环/下发不通 | A/B 反接/未共地/COM口错    | 断电核对；适配器 A/B/GND 直接连板端       |
-| 下发不生效  | 寄存器地址/值/CRC 错/RTU 超时 | 用 gen_param_frames.py 生成帧；核对 §3.2 |
-| 越界被接受  | 校验未实现             | 退回阶段3补 reg_is_valid           |
-| 半双工冲突  | DE/RE 方向错         | 确认 PD11 高=发/低=收 + portserial   |
-| 重启参数丢失 | 未持久化（A7-03）       | 已知限制，只保运行期生效               |
+| 现象      | 原因                   | 处理                                  |
+| ------- | -------------------- | ----------------------------------- |
+| 回环/下发不通 | A/B 反接/未共地/COM口错     | 断电核对；适配器 A/B/GND 直接连板端              |
+| 下发不生效   | 寄存器地址/值/CRC 错/RTU 超时 | 用 gen\_param\_frames.py 生成帧；核对 §3.2 |
+| 越界被接受   | 校验未实现                | 退回阶段3补 reg\_is\_valid               |
+| 半双工冲突   | DE/RE 方向错            | 确认 PD11 高=发/低=收 + portserial        |
+| 重启参数丢失  | 未持久化（A7-03）          | 已知限制，只保运行期生效                        |
 
 ## 2. 执行路线图（5 阶段）
 
@@ -148,7 +152,7 @@
 
 - 确认 A4-03 已通过（防抖 30/60 生效）
 
-- 确认 USART3 已初始化（`usart.c` MX\_USART3\_UART\_Init + huart3，115200）+ rs485_drv.c 存在（EN=PD11 方向控制）
+- 确认 USART3 已初始化（`usart.c` MX\_USART3\_UART\_Init + huart3，115200）+ rs485\_drv.c 存在（EN=PD11 方向控制）
 
 - 帧协议初版：沿用 A5-02（0xA5/0x5A/CRC16-Modbus参数），人已确认
 
@@ -166,12 +170,18 @@
 
 ### 🟠 阶段 3：实现（角色：Dev Agent）【✅ 2026-09-08 代码落地】
 
-- [x] 步骤1：接入 FreeModbus（Middleware/Third_Party/FreeModbus，port 适配 USART3/RS485，修 portserial put_index bug，RS485 宏对齐 PD11，关 master）
+- [x] 步骤1：接入 FreeModbus（Middleware/Third\_Party/FreeModbus，port 适配 USART3/RS485，修 portserial put\_index bug，RS485 宏对齐 PD11，关 master）
+
 - [x] 步骤2：新建 `modbus_app.c/h`（保持寄存器 0x0001\~0x0005 读写回调，读快照/写两遍校验）
+
 - [x] 步骤3：改 `freertos.c`：删 paramTask/RS485LoopTask，新增 MBSlavePollTask + `param_apply` 定义
-- [x] 步骤4：`stm32f4xx_it.c` 加 USART3_IRQHandler；`usart.c` USART3 NVIC
+
+- [x] 步骤4：`stm32f4xx_it.c` 加 USART3\_IRQHandler；`usart.c` USART3 NVIC
+
 - [x] 步骤5：Makefile 收录 FreeModbus 源 + 头路径，移除 param.c（BUG-002 教训）
+
 - [x] 步骤6：`build.bat` 编译无错误；`gen_param_frames.py` → Modbus RTU 帧
+
 - **判定标准**：编译/烧录输出证据已记录（flash 176752B，总 274432B）
 
 - **⏸️ 停等：人确认后进入阶段 4**
@@ -179,17 +189,25 @@
 ### 🟣 阶段 4：测试（角色：Test Agent）
 
 - [ ] 步骤1：链路直连自检（§3.3）
+
 - [ ] 步骤2：正常下发→生效（§3.4），记录下发值 vs 生效值
+
 - [ ] 步骤3：越界/坏帧用例（§3.5）逐条记录
+
 - [ ] 步骤4：回归 A4-03（改参后 30/60→40/60 逻辑仍按新帧数生效，AC-12）
+
 - [ ] 步骤5：逐条核对 §4 AC-01\~AC-12
+
 - **判定标准**：AC 有实际记录值
+
 - **⏸️ 停等：人确认后进入阶段 5**
 
 ### 🔴 阶段 5：审查（角色：Review Agent）
 
 - 独立审查：AC 逐条打勾 + 寄存器读写健壮性 + 方向控制
+
 - 通过 → 回填「维护与调试」+ 父FEAT项目表 + INDEX + 维护地图
+
 - 未通过 → 退回对应阶段
 
 ## 3. 傻瓜式操作单（照做即可）
@@ -230,14 +248,14 @@
 
 ### 5.1 影响文件
 
-| 文件                                   | 改动类型   | 说明                                       |
-| ------------------------------------ | ------ | ---------------------------------------- |
-| `firmware/soundDog/Middlewares/Third_Party/FreeModbus/` | 新增     | FreeModbus 协议栈（port: portserial/porttimer/portevent/portcritical + modbus core） |
-| `firmware/soundDog/App/modbus_app.c/h` | 新增     | 保持寄存器 0x0001\~0x0005 读写回调（读快照/写两遍校验） |
-| `firmware/soundDog/App/freertos.c`      | 修改     | MBSlavePollTask（eMBInit→eMBEnable→eMBPoll）+ param_apply |
-| `firmware/soundDog/Src/stm32f4xx_it.c`  | 修改     | USART3_IRQHandler（RXNE/IDLE/TC/ORE）      |
-| `firmware/soundDog/BSP/param.h`        | 修改     | 参数ID/范围宏 + param_apply 声明（废弃 0xA5 接口） |
-| `firmware/soundDog/Inc/pin_config.h`   | 已有     | RS485 DE = PD11                           |
+| 文件                                                      | 改动类型 | 说明                                                                              |
+| ------------------------------------------------------- | ---- | ------------------------------------------------------------------------------- |
+| `firmware/soundDog/Middlewares/Third_Party/FreeModbus/` | 新增   | FreeModbus 协议栈（port: portserial/porttimer/portevent/portcritical + modbus core） |
+| `firmware/soundDog/App/modbus_app.c/h`                  | 新增   | 保持寄存器 0x0001\~0x0005 读写回调（读快照/写两遍校验）                                            |
+| `firmware/soundDog/App/freertos.c`                      | 修改   | MBSlavePollTask（eMBInit→eMBEnable→eMBPoll）+ param\_apply                        |
+| `firmware/soundDog/Src/stm32f4xx_it.c`                  | 修改   | USART3\_IRQHandler（RXNE/IDLE/TC/ORE）                                            |
+| `firmware/soundDog/BSP/param.h`                         | 修改   | 参数ID/范围宏 + param\_apply 声明（废弃 0xA5 接口）                                          |
+| `firmware/soundDog/Inc/pin_config.h`                    | 已有   | RS485 DE = PD11                                                                 |
 
 ### 5.2 调试要点
 
@@ -253,8 +271,9 @@
 
 ## 6. 执行日志
 
-| 时间     | 阶段     | 角色     | 摘要     | 遇阻     |
-| ------ | ------ | ------ | ------ | ------ |
-| 2026-09-08 | 阶段3  | Dev Agent | FreeModbus 集成 + modbus_app 寄存器回调 + USART3 中断 + Makefile 收录 + gen_param_frames.py 改 Modbus RTU；编译通过（flash 176752B/总 274432B） | 无 |
-| 2026-09-08 | 阶段2  | Dev Agent | 协议定稿：废弃 0xA5 → Modbus RTU（人确认）；寄存器映射/链路/越界策略定稿 | 无 |
-| <br /> | 阶段1  | Dev Agent | 准备完成（A4-03 通过、USART3/RS485 确认、初版 0xA5 协议记录） | 无 |
+| 时间         | 阶段  | 角色        | 摘要                                                                                                                             | 遇阻 |
+| ---------- | --- | --------- | ------------------------------------------------------------------------------------------------------------------------------ | -- |
+| 2026-09-08 | 阶段3 | Dev Agent | FreeModbus 集成 + modbus\_app 寄存器回调 + USART3 中断 + Makefile 收录 + gen\_param\_frames.py 改 Modbus RTU；编译通过（flash 176752B/总 274432B） | 无  |
+| 2026-09-08 | 阶段2 | Dev Agent | 协议定稿：废弃 0xA5 → Modbus RTU（人确认）；寄存器映射/链路/越界策略定稿                                                                                 | 无  |
+| <br />     | 阶段1 | Dev Agent | 准备完成（A4-03 通过、USART3/RS485 确认、初版 0xA5 协议记录）                                                                                    | 无  |
+
