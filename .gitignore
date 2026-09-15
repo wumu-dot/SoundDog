@@ -12,3 +12,7 @@ build/
 .npm-cache-tmp/
 .tools/
 .codegraph/
+# Understand-Anything 知识图谱产物（2026-09-15 预研时暴露误提交，禁止入库）
+.ua/
+# Python 编译缓存
+__pycache__/
