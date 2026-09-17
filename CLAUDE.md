@@ -1,6 +1,6 @@
 # 项目全局上下文（会话自动继承）
 
-<!-- DOC-STATE: CHIP=STM32F407ZGT6, RTOS=FreeRTOS/CMSIS-RTOS_v2, BUILD=STM32CubeIDE+arm-none-eabi-gcc, TASKS=3, HSE=8000000, MIN_STACK=128 -->
+<!-- DOC-STATE: CHIP=STM32F407ZGT6, RTOS=FreeRTOS/CMSIS-RTOS_v2, BUILD=STM32CubeIDE+arm-none-eabi-gcc, TASKS=4, HSE=8000000, MIN_STACK=128 -->
 
 ## 硬件平台
 
@@ -9,7 +9,7 @@
 
 ## 软件环境
 
-RTOS：FreeRTOS CMSIS-RTOS\_v2 抢占式，当前 1 个占位任务（规划 6 个）
+RTOS：FreeRTOS CMSIS-RTOS\_v2 抢占式，当前 4 个任务：defaultTask（占位）/ specTask（频谱+MFCC+判决）/ displayTask（OLED）/ mbSlave（Modbus 从站轮询）＋接收线程 mbRxRecv（FreeModbus port）
 驱动库：STM32 HAL (CubeMX 生成)
 编译构建：Makefile + mingw32-make + arm-none-eabi-gcc（也有 CubeIDE 工程可选用）
 

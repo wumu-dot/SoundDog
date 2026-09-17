@@ -13,14 +13,17 @@
 | 阶段 | 状态 | 说明 |
 |------|------|------|
 | A1 音频采集链路 | 🟢 **全线收官（2026-08-28）** | A1-01 ✅ / A1-02 ✅（安静 max 160~1606、吹气 3441~32767）/ A1-03 ✅（左声道有效）/ A1-04 ✅（**逻辑分析仪实测**：WS=16kHz 精确、SCK≈1MHz，Fs=16000Hz 无误） |
-| A2 FFT 频谱 | ⬜ 未开始 | A2-01 CMSIS-DSP 集成，A2-02 FFT 幅度谱（下一步） |
+| A2 FFT 频谱 | 🟢 **完工** | A2-01 ✅ CMSIS-DSP 集成；A2-02 ✅ FFT 幅度谱；A2-03 ✅ OLED 柱状显示；A2-04 ✅ BANDS 串口行 |
+| A3 MFCC 特征 | 🟢 **完工** | A3-01 ✅ MFCC 前置（分帧/预加重/汉明）；A3-02 ✅ Mel 滤波（512 rfft + 32 维）；A3-03 ✅ Log+DCT-II（13 维 MFCC） |
+| A4 距离比对/判决 | 🟢 **完工** | A4-02 ✅ d_min 实时比对；A4-03 ✅ 连续帧防抖判决（报警/解除）；A4-04 ✅ Modbus RTU 从站+参数下发 |
+| A5 RS485 组网 | 🟡 **联调中** | A5-01 ✅ USART3+RS485 硬件就绪；**RS485 链路是否贯通待硬件复测（换 ESP32 新板后回环确认）** |
 
-### 今天修掉的真实 Bug（均为真机实测发现）
+### 近期真实 Bug（均为真机实测发现）
 
 | Bug | 等级 | 根因 | 修复 |
 |-----|------|------|------|
 | [BUG-20260816-001](docs/bugs/BUG-20260816-001-i2s-dma-size-overflow.md) | P0 | `HAL_I2S_Receive_DMA` 对 32-bit 格式把 Size 翻倍，而 DMA 为 32 位宽 → 搬运 8192B 超 4096B 缓冲，踩坏 `huart1` 和 FreeRTOS 全局区（任务创建时 HardFault） | Size 传 `I2S_HALF_BUF_SIZE`（512） |
-| [BUG-20260816-002](docs/bugs/BUG-20260816-002-i2s-data-alignment.md) | P1 | I2S 实际为 **4 字周期**（每 4 个 32-bit 字仅第 1 个含音频，其余为悬空/高阻字 0xFFFF）；v9 全帧提取混入伪迹，max 被钉死 ~32000 | v10：`extract_frame` 步进 4 取 `word[4k]` 低 16 位，128 真采样/帧；采样率核准 **16000Hz 整**（详见 [BUG-002 详解](docs/summary/BUG-002-I2S数据提取问题详解.md)） |
+| [BUG-20260816-002](docs/bugs/BUG-20260816-002-i2s-data-alignment.md) | P1 | I2S 实际为 **4 字周期**（每 4 个 32-bit 字仅第 1 个含音频，其余为悬空/高阻字 0xFFFF）；v9 全帧提取混入伪迹，max 被钉死 ~32000 | v10：`extract_frame` 步进 4 取 `word[4k]` 低 16 位，128 真采样/帧；采样率核准 **16000Hz 整** |
 
 另修复：I2S OVR 溢出停摆（SPI3 最小错误中断只清 OVR、强制关 RXNEIE、回调内稳健清除循环）。
 
@@ -35,9 +38,11 @@
 
 ## 软件环境
 
-- RTOS：FreeRTOS CMSIS-RTOS_v2（当前 1 个占位任务 defaultTask）
+- RTOS：FreeRTOS CMSIS-RTOS_v2（4 个任务：defaultTask / specTask / displayTask / mbSlave）
 - 驱动库：STM32 HAL（CubeMX 生成，`soundDog.ioc`）
 - 构建：Makefile + mingw32-make + arm-none-eabi-gcc（`C:\ST\STM32CubeCLT_1.21.0\`）
+- 通信：USART1 调试口（115200，单写者=specTask）；USART3 RS485（MAX3485，Modbus RTU 从站）
+- Modbus：FreeModbus port（CMSIS-RTOS2），地址 0x01、115200-8N1、保持寄存器 0 基址
 - 中断优先级铁律：NVIC Group 4，`configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY=5`，0~4 禁调 FreeRTOS FromISR API
 
 ## 快速开始
@@ -53,21 +58,40 @@ firmware\build_and_flash.bat
 firmware\flash_isp.bat
 ```
 
-烧录后串口（115200）应看到：
+烧录后串口（115200）应看到（串口示例，省略 I2C/FFT 自检中间行 `[ ... ]`）：
 
 ```
 SoundDog boot OK, SYSCLK=168000000
+I2C scan: (end)
+OLED init OK (selftest grid)
+A2-02: spectrum path ready
+FFT selftest: peak bin=... (…Hz) mag=…
 I2S_DRV_Init ret=0 (0=HAL_OK)
-I2S DMA started! waiting data...
 [31] max=xxxx        ← 随声音变化 = A1 通过
 ```
+
+> 三行契约：`SoundDog boot OK` / `I2S_DRV_Init ret=0` / `[31] max` 三者齐见即 A1~A2 链路通。若 `ret!=0` 或调 `OLED init FAIL`，先查 I2S/OLED 接线。
 
 ## 目录结构
 
 ```
 firmware/soundDog/      STM32 工程（CubeMX 生成 + 手写驱动）
-  ├── Src/i2s_drv.c     手写 I2S3 DMA 双缓冲采集驱动
+  ├── App/              应用任务层
+  │     main.c          入口/外设初始化/开机打印；_write 收口（USART1 单写者临界区）
+  │     freertos.c      FreeRTOS 任务定义（spec/display/mbSlave）+ 取证打印
+  │     modbus_app.c    应用层 Modbus 参数接口
+  │     rtos_hooks.c    malloc 失败/栈溢出钩子（P1-2）
+  ├── BSP/              板级驱动（CubeMX Src/ 之外的 手写驱动）
+  │     i2s_drv.c       手写 I2S3 DMA 双缓冲采集驱动
+  │     rs485_drv.c     RS485 收发驱动（DE 方向控制 PD11）
+  │     spectrum.c/fft.c/mfcc.c/mel.c/mfcc_dct.c/model_normal.c/dist.c/debounce.c ...  DSP 链
+  │     oled_drv.c       OLED 显示驱动
   ├── Inc/pin_config.h  引脚映射权威来源（改引脚只改这一个文件）
+  ├── Src/              CubeMX 生成的 HAL 启动/外设初始化（stm32f4xx_*.c、i2s.c、dma.c…）
+  ├── Middlewares/Third_Party/FreeModbus/port/cmsis_rtos2/
+  │     portserial.c    Modbus 串口 port（RX 帧缓冲/回环探针，受 MB_PROBE_ENABLE 开关）
+  │     portevent.c     Modbus 事件 flag 分发（P2-10）
+  │     portcritical.c  全局临界区（0 基址注意见记忆 R34）
   └── soundDog.ioc      CubeMX 工程文件
 docs/                   文档体系（features/ 两级FEAT、bugs/、troubleshooting/、tools/…）
 HANDOFF.md              交接文档（接线、踩坑记录、新板跑通清单）
