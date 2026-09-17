@@ -16,3 +16,11 @@ build/
 .ua/
 # Python 编译缓存
 __pycache__/
+# 编辑器调试/工作区配置（launch.json 内含本机绝对路径，禁止入库）
+.vscode/
+# clangd/CodeGraph 生成的编译数据库（firmware/soundDog/compile_commands.json）
+compile_commands.json
+compile_commands*.json
+# IDE/工具内存目录（.trae=AI IDE 工作区状态，.workbuddy=agent 记忆，均非源码，2026-09-17 排除）
+.trae/
+.workbuddy/

@@ -10,12 +10,14 @@
  *   PC(Modbus Master) → RS485 → FreeModbus 栈 → eMBRegHoldingCB(modbus_app.c)
  *     → reg_is_valid(本头文件范围宏) → param_apply(freertos.c) → debounce_set_params
  *
- * 寄存器映射（保持寄存器 1 基址，与 modbus_app.c reg_off_to_pid 一一对应）：
- *   RTU 0x0001 ↔ PARAM_ID_TH         阈值（×100 定点，600=6.0）
- *   RTU 0x0002 ↔ PARAM_ID_ALARM_CNT  轨1 连续异常帧 → 报警
- *   RTU 0x0003 ↔ PARAM_ID_RELEASE_CNT 解除 连续正常帧 → 解除
- *   RTU 0x0004 ↔ PARAM_ID_WIN_LEN    轨2 滑窗长（固定=100，拒改）
- *   RTU 0x0005 ↔ PARAM_ID_WIN_ANOM   轨2 窗内异常帧阈值
+ * 寄存器映射（帧地址 0 基址，与 modbus_app.c reg_off_to_pid 一一对应：
+ * FreeModbus mbfuncholding.c 回调前内部 usAddress++，回调偏移 usAddress-1，
+ * 两项抵消后命中本表"帧地址"，故帧字段用 0 基址，R34 实证）：
+ *   帧地址 0x0000 ↔ PARAM_ID_TH         阈值（×100 定点，600=6.0）
+ *   帧地址 0x0001 ↔ PARAM_ID_ALARM_CNT  轨1 连续异常帧 → 报警
+ *   帧地址 0x0002 ↔ PARAM_ID_RELEASE_CNT 解除 连续正常帧 → 解除
+ *   帧地址 0x0003 ↔ PARAM_ID_WIN_LEN    轨2 滑窗长（固定=100，拒改）
+ *   帧地址 0x0004 ↔ PARAM_ID_WIN_ANOM   轨2 窗内异常帧阈值
  *
  * R27/R32 三源（编码前已研，见 FEAT-A4-04 §1.4c）：
  *   - FreeModbus：quanghona/Freemodbus-CMSIS-RTOS2-STM32；

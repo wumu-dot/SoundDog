@@ -233,6 +233,9 @@ void USART3_IRQHandler(void)
 {
   if (__HAL_UART_GET_FLAG(&huart3, UART_FLAG_RXNE))
   {
+    /* A4-04 阶段4诊断探针：链路验证已闭环（2026-09-14，R36），移除翻转 LED_STATUS(PB1)，
+     * 恢复纯净 RXNE 节拍（原翻转仅作入中断判定，不参与协议栈）。 */
+    // HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_1);   /* 验证后注释，保留历史痕迹 */
     prvvUARTRxReceiveCharISR((CHAR)(huart3.Instance->DR & 0xFF));
     __HAL_UART_CLEAR_FLAG(&huart3, UART_FLAG_RXNE);
   }

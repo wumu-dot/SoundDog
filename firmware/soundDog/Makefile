@@ -39,6 +39,7 @@ C_SOURCES =  \
 App/main.c \
 Src/gpio.c \
 App/freertos.c \
+App/rtos_hooks.c \
 Src/dma.c \
 Src/i2s.c \
 BSP/i2s_drv.c \
@@ -179,7 +180,7 @@ C_DEFS =  \
 -DUSE_HAL_DRIVER \
 -DSTM32F407xx \
 -DARM_MATH_CM4F \
--D__FPU_PRESENT=1
+-DHSE_VALUE=8000000U
 
 
 # AS includes
@@ -275,7 +276,7 @@ $(BUILD_DIR)/%.bin: $(BUILD_DIR)/%.elf | $(BUILD_DIR)
 	$(BIN) $< $@	
 	
 $(BUILD_DIR):
-	mkdir $@		
+	mkdir -p $@		
 
 #######################################
 # clean up

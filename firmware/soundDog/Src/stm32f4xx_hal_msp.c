@@ -83,9 +83,15 @@ void HAL_MspInit(void)
   HAL_NVIC_SetPriority(PendSV_IRQn, 15, 0);
 
   /* Peripheral interrupt init */
-  /* PVD_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(PVD_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(PVD_IRQn);
+  /* PVD_IRQn interrupt configuration（P2-7 审查缺陷）：
+   * 全工程无任何 HAL_PWR_ConfigPVD()/PWR_PVD_LEVEL_* 调用，PVD 无触发源、是纯死中断。
+   * 原 SetPriority(PVD,0,0) 把抢占优先级设为 0 但 EnableIRQ 了它——一旦有人开启 PVD，
+   * 将以最高抢占优先级 0 打断包括临界区在内的一切，且不在 FreeRTOS
+   * configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY(5) 约束内。
+   * 处置：不使能（无源死中断），并用最低优先级 15 兜底；需要真正用 PVD 时再改。
+   * SetPriority 即使对未使能的 IRQ 也无副作用，保留 15 明确"与其余普通中断同级"。 */
+  HAL_NVIC_SetPriority(PVD_IRQn, 15, 0);
+  /* HAL_NVIC_EnableIRQ(PVD_IRQn); */
 
   /* USER CODE BEGIN MspInit 1 */
 

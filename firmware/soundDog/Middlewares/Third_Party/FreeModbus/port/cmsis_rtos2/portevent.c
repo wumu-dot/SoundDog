@@ -55,28 +55,34 @@ xMBPortEventGet( eMBEventType * eEvent )
     uint32_t receivedEvent;
     const uint32_t EVENTS = EV_READY | EV_FRAME_RECEIVED | EV_EXECUTE | EV_FRAME_SENT;
 
-    /* waiting forever OS event */
-    receivedEvent = osEventFlagsWait(xEventId, EVENTS, osFlagsWaitAny, osWaitForever);
-    switch (receivedEvent)
-    {
-        case EV_READY:
-            *eEvent = EV_READY;
-            break;
+    /* P2-10（审查缺陷）：原实现 osFlagsWaitAny + 单 bit switch，多个 flag 同时
+     * 置位时 receivedEvent 是位掩码 → 落 default 返回 FALSE；而 osEventFlagsWait
+     * 默认行为会自动清除已返回的 flag → 事件静默丢失且无痕。eMBPoll 因此漏处理。
+     *
+     * 修复：用 osFlagsNoClear 不自动清位，按位优先级逐个分发，每分发一个 bit
+     * 显式 Clear 掉它，未处理的 bit 保留在事件组中、下次调用继续分发 → 不丢事件。
+     * 权重顺序：EV_FRAME_SENT 最低，EV_READY 最高（协议栈状态机要求优先处理）。 */
+    receivedEvent = osEventFlagsWait(xEventId, EVENTS, osFlagsNoClear, osWaitForever);
 
-        case EV_FRAME_RECEIVED:
-            *eEvent = EV_FRAME_RECEIVED;
-            break;
-
-        case EV_EXECUTE:
-            *eEvent = EV_EXECUTE;
-            break;
-
-        case EV_FRAME_SENT:
-            *eEvent = EV_FRAME_SENT;
-            break;
-
-        default:
-            return FALSE;
+    if ((receivedEvent & EV_READY) != 0u) {
+        *eEvent = EV_READY;
+        (void)osEventFlagsClear(xEventId, EV_READY);
+        return TRUE;
     }
-    return TRUE;
+    if ((receivedEvent & EV_FRAME_RECEIVED) != 0u) {
+        *eEvent = EV_FRAME_RECEIVED;
+        (void)osEventFlagsClear(xEventId, EV_FRAME_RECEIVED);
+        return TRUE;
+    }
+    if ((receivedEvent & EV_EXECUTE) != 0u) {
+        *eEvent = EV_EXECUTE;
+        (void)osEventFlagsClear(xEventId, EV_EXECUTE);
+        return TRUE;
+    }
+    if ((receivedEvent & EV_FRAME_SENT) != 0u) {
+        *eEvent = EV_FRAME_SENT;
+        (void)osEventFlagsClear(xEventId, EV_FRAME_SENT);
+        return TRUE;
+    }
+    return FALSE;
 }

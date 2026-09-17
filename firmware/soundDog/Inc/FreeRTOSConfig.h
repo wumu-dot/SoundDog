@@ -73,6 +73,11 @@
 #define configUSE_TRACE_FACILITY                 1
 #define configUSE_16_BIT_TICKS                   0
 #define configUSE_MUTEXES                        1
+/* P1-2（审查缺陷）：此前两钩子在本文件根本不存在，由 FreeRTOS.h 兜底为 0 —— 一旦
+ * 栈溢出/堆分配失败，现象只有 HardFault 卡死，毫无现场信息。启用后由 App/rtos_hooks.c
+ * 提供钩子（cmsis_os2.c 有 __WEAK 空实现，强符号覆盖），打印崩溃任务后 for(;;) 挂起。 */
+#define configCHECK_FOR_STACK_OVERFLOW           2
+#define configUSE_MALLOC_FAILED_HOOK             1
 #define configQUEUE_REGISTRY_SIZE                8
 #define configUSE_RECURSIVE_MUTEXES              1
 #define configUSE_COUNTING_SEMAPHORES            1

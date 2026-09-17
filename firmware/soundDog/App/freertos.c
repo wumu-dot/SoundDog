@@ -20,6 +20,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "FreeRTOS.h"
 #include "task.h"
+#include "portable.h"     /* 取证打印：xPortGetFreeHeapSize()（P2-收帧栈 512→1024 堆预算可观测） */
 #include "main.h"
 #include "cmsis_os.h"
 
@@ -320,12 +321,15 @@ static void MBSlavePollTask(void *argument)
 
   if (eMBInit(MB_RTU, 0x01u, 3u, 115200UL, MB_PAR_NONE) != MB_ENOERR) {
     printf("mbSlave: eMBInit failed\r\n");
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);   /* 诊断[临时]:ALARM灭=init失败 */
     for (;;) { osDelay(1000); }
   }
   if (eMBEnable() != MB_ENOERR) {
     printf("mbSlave: eMBEnable failed\r\n");
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);   /* 诊断[临时]:ALARM灭=enable失败 */
     for (;;) { osDelay(1000); }
   }
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);       /* 诊断[临时]:ALARM亮=init成功 */
   printf("Modbus slave enabled on USART3 addr=0x01 115200-8N1\r\n");
 
   for (;;) {
@@ -349,6 +353,16 @@ static void SpecTask(void *argument)
   static frame_msg_t msg;
   static int16_t     pcm256[SPEC_WINDOW];
   static uint32_t    bands[SPEC_BANDS];
+  /* P1-1（审查缺陷）修复：失配第二帧挂起为下一窗首帧。
+   * 原实现：第二帧连不上首帧时 `continue` 直接丢掉该帧，下一轮从头再取两帧 →
+   * 每丢一次实际损失 2 帧（不是注释声称的 1 帧），且跳过了 spec_process/mfcc_feed，
+   * 使 MFCC 判决流（mel_frame_cb→dist_process→debounce_process）整窗停摆。
+   * 修复：把失配的第二帧存入 s_pend_frame 挂起，下一窗以它为第一帧拼接。
+   * 取舍（审查官 §8.3-B 定稿）：本窗废弃→停摆仍 1 窗（被废弃窗不走 spec/mfcc，
+   * 与当前一致），但每丢一次只损失 1 帧（2→1）；不采用"硬拼失配帧"的相位跳变方案
+   * （二者不可兼得）。验收判据：连续丢帧下 MFCC 平均帧率仍 100 帧/s，n_frames 不跳号。 */
+  static frame_msg_t  s_pend_frame;
+  static bool         s_pend_has = false;
   static char        bands_line[256];   /* A2-04 BANDS 行缓冲（静态，~224B 最长） */
   TickType_t         t_bands_last = 0u; /* A2-04 节流基准（tick 差值门控） */
   TickType_t         t_mfcc_last = 0u; /* A3-01 MFCC 行节流基准（1s） */
@@ -389,27 +403,56 @@ static void SpecTask(void *argument)
     mfcc_set_frame_cb(mel_frame_cb);
   }
 
+  /* P2-收帧栈 512→1024 取证打印（审查官 §8.3-D：把堆余量/栈水位变成可观测值）。
+   * 全仓此前零调用 xPortGetFreeHeapSize / uxTaskGetStackHighWaterMark —— 手段留了却没用。
+   * specTask 作为运行期 USART1 唯一打印者，启动后打一次四任务栈水位 + 堆余量，便于回归
+   * 判断"扩容是否吃掉堆余量近四分之一"是否可接受（预期 2276→约1764B）。 */
+  printf("FREERTOS heap free=%luB\r\n",
+         (unsigned long)xPortGetFreeHeapSize());
+  printf("  stack:HWM default=%lu spec=%lu display=%lu mbSlave=%lu\r\n",
+         (unsigned long)uxTaskGetStackHighWaterMark(defaultTaskHandle),
+         (unsigned long)uxTaskGetStackHighWaterMark(specTaskHandle),
+         (unsigned long)uxTaskGetStackHighWaterMark(displayTaskHandle),
+         (unsigned long)uxTaskGetStackHighWaterMark(modbusSlaveTaskHandle));
+
   for (;;)
   {
-    /* 收两帧 → 拼一个 256 点窗口 */
-    if (xQueueReceive(q, &msg, portMAX_DELAY) != pdTRUE) { continue; }
+    /* 收两帧 → 拼一个 256 点窗口（P1-1 修复后读取逻辑见下） */
+    frame_msg_t f1;                       /* 首帧（局部，避免与循环外 msg 混） */
+    if (s_pend_has) {
+      /* 上一窗失配时挂起的帧：直接作为本窗首帧，不再从队列取 */
+      f1 = s_pend_frame;
+      s_pend_has = false;
+    } else if (xQueueReceive(q, &msg, portMAX_DELAY) != pdTRUE) {
+      continue;
+    } else {
+      f1 = msg;
+    }
+    /* 首帧进入统计（丢帧恢复：无论后续是否失配，首帧照常统计） */
     n_frames++;
     if (n_frames == 1u) {
       /* 行首必须为 "I2S DMA started"（规格 §3.4 boot 三行契约，后续 FEAT 验收
        * 按此前缀匹配；A1-02 亦如此）。2026-08-29 从 ISR 移入本任务打印 */
       printf("I2S DMA started (first frame idx=%lu)\r\n",
-             (unsigned long)msg.frame_index);
+             (unsigned long)f1.frame_index);
     }
-    frame_max_stat(n_frames, &msg);
-    memcpy(pcm256, msg.pcm, sizeof(msg.pcm));
-    idx1 = msg.frame_index;
+    frame_max_stat(n_frames, &f1);
+    memcpy(pcm256, f1.pcm, sizeof(f1.pcm));
+    idx1 = f1.frame_index;
 
     if (xQueueReceive(q, &msg, portMAX_DELAY) != pdTRUE) { continue; }
     n_frames++;
     frame_max_stat(n_frames, &msg);
-    /* 丢帧校验（评审 Important#1）：队列满时 ISR 按策略丢帧，若第二帧与首帧
-     * 不连续，拼窗会产生相位跳变 → 虚假宽带分量。废弃本窗，下窗从本帧起拼。 */
-    if (msg.frame_index != (idx1 + 1u)) { continue; }
+    /* P1-1（审查缺陷）修复：丢帧校验（评审 Important#1）：队列满时 ISR 按策略丢帧，
+     * 若第二帧与首帧不连续，拼窗会产生相位跳变 → 虚假宽带分量。
+     * 原实现 `continue` 把失配第二帧丢掉 → 每丢一次实际损 2 帧（非注释声称的 1 帧），
+     * 且跳过 mfcc_feed 使判决流整窗停摆。现改为挂起为下一窗首帧（真正实现注释语义），
+     * 采审查官 §8.3-B 定稿取舍：废弃本窗（停摆 1 窗），但丢帧数 2→1，不硬拼保相位。 */
+    if (msg.frame_index != (idx1 + 1u)) {
+      s_pend_frame = msg;                 /* 本帧改作下一窗首帧 */
+      s_pend_has   = true;
+      continue;
+    }
     memcpy(&pcm256[I2S_PCM_PER_FRAME], msg.pcm, sizeof(msg.pcm));
 
     spec_process(pcm256, bands);

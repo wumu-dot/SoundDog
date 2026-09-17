@@ -23,7 +23,6 @@ if %errorlevel% neq 0 (
     cd /d "%~dp0"
     echo.
     echo [FAIL] Build FAILED! Check errors above.
-    pause
     exit /b 1
 )
 cd /d "%~dp0"
@@ -33,4 +32,4 @@ echo ELF: soundDog\build\soundDog.elf
 echo HEX: soundDog\build\soundDog.hex
 echo.
 echo ========================================
-pause
+exit /b 0

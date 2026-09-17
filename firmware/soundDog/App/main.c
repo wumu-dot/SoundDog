@@ -35,6 +35,7 @@
 #include "audio_pipe.h"
 #include "FreeRTOS.h"
 #include "queue.h"
+#include "task.h"          /* P2-1: _write 内 taskENTER_CRITICAL 互斥（USART1 单写者） */
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
@@ -63,6 +64,16 @@
 /* frame_msg_t / audio_queue_get() 声明移至 audio_pipe.h（freertos.c 的 specTask 共用） */
 static QueueHandle_t audio_q = NULL;   /* 必须先于 I2S_DRV_Init 创建！深度 4（~32ms 缓冲余量） */
 
+/* ---- P2-1 复核修正（2026-09-17，审查报告第三节）：USART1 写互斥改用 osMutex ----
+ * 原 taskENTER_CRITICAL 包阻塞式 HAL_UART_Transmit 会屏蔽 SysTick/I2S/USART3/SPI3
+ * 中断：RX 探针单行~778B≈67ms，tick 冻结 + I2S DMA 溢出丢帧风险 + 临界区内
+ * HAL_GetTick() 被屏蔽致 100ms 超时永不成立→_write 死循环。
+ * 改为互斥信号量：只做任务级串行化、不屏蔽任何中断（审查官建议首选）。
+ * NULL=调度器启动前 boot 期：此时单线程无并发，直接发送（不拿锁→无自旋死锁）；
+ * 非 NULL=运行期：osMutexAcquire/Release 串行化所有走 printf 的 USART1 写。
+ * 创建点在 osKernelInitialize() 之后、osKernelStart() 之前（boot printf 已先执行完毕）。 */
+static osMutexId_t g_uart1_mutex = NULL;
+
 /* ---- 音频帧回调（在 DMA ISR 中调用，务必短小！）----
  * A2-02 架构：只做拷贝+入队（~10µs），FFT 计算移到 specTask（CPU 预算 3%）。
  * 串口修复（2026-08-29）：原 ISR 内 printf（max 统计/首帧提示）与任务侧
@@ -75,7 +86,11 @@ static void audio_frame_cb(const audio_frame_t *frame)
     memcpy(msg.pcm, frame->pcm, sizeof(msg.pcm));
     msg.frame_index = frame->frame_index;
     /* 满时丢弃本帧（音频流允许丢帧，不阻塞 ISR） */
-    xQueueSendFromISR(audio_q, &msg, NULL);
+    /* P2-2（审查缺陷）：传 &hpw + portYIELD_FROM_ISR，被唤醒任务随 ISR 返回立即抢占，
+     * 而非等下个 tick（1ms）——减少 specTask 最坏唤醒延迟。 */
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    xQueueSendFromISR(audio_q, &msg, &xHigherPriorityTaskWoken);
+    portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
 
 /* 任务侧取队列的句柄暴露（freertos.c 的 defaultTask 使用） */
@@ -98,7 +113,18 @@ void MX_FREERTOS_Init(void);
 
 int _write(int fd, char *ptr, int len)
 {
-    HAL_UART_Transmit(&huart1, (uint8_t *)ptr, len, 100);
+    /* P2-1（审查缺陷→复核修正 2026-09-17）：USART1 单写者（BUG-20260829-003）——
+     * specTask 与 MBSlavePollTask 并发调 HAL_UART_Transmit（不可重入）→ 输出交错/HAL 竞争。
+     * 修正：以互斥信号量 g_uart1_mutex 串行化（不屏蔽任何中断，规避原临界区
+     * tick 冻结/I2S 打断/超时死循环——审查报告第三节）。NULL=boot 期（调度器未启动、
+     * 单线程无并发）直接发送，不拿锁，从根上避免调度器未启动时的自旋。 */
+    if (g_uart1_mutex != NULL) {
+        (void)osMutexAcquire(g_uart1_mutex, osWaitForever);
+        HAL_UART_Transmit(&huart1, (uint8_t *)ptr, (uint16_t)len, 100);
+        (void)osMutexRelease(g_uart1_mutex);
+    } else {
+        HAL_UART_Transmit(&huart1, (uint8_t *)ptr, (uint16_t)len, 100);
+    }
     return len;
 }
 
@@ -161,7 +187,13 @@ int main(void)
   HAL_Init();
 
   /* USER CODE BEGIN Init */
-
+  /* P1-3（复核更正 2026-09-17）：显式重申 NVIC Priority Group 4（4 位抢占 / 0 位子优先级）。
+   * 复核确认：此配置实为幂等重申——HAL_Init() 内部（stm32f4xx_hal.c:173）已调用
+   * HAL_NVIC_SetPriorityGrouping(NVIC_PRIORITYGROUP_4)，分组自复位起就显式成立。
+   * 此处保留作为显式 enforce，防后续改动分组时 DMA1_Stream2/USART3/SPI3 的优先级 5
+   * 语义静默改变（触及 configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY=5「0~4 禁调 FromISR」
+   * 红线），与 HAL_Init() 保持一致，防改动漂移。 */
+  HAL_NVIC_SetPriorityGrouping(NVIC_PRIORITYGROUP_4);
   /* USER CODE END Init */
 
   /* Configure the system clock */
@@ -267,6 +299,11 @@ printf("I2S_DRV_Init ret=%d (0=HAL_OK)\r\n", ret);
   /* Init scheduler */
   osKernelInitialize();  /* Call init function for freertos objects (in cmsis_os2.c) */
   MX_FREERTOS_Init();
+
+  /* P2-1 复核修正（2026-09-17）：USART1 写互斥量在核对象就绪后创建。
+   * 此段之前的所有 boot printf 走 g_uart1_mutex==NULL 无锁分支（单线程，无并发）；
+   * 之后运行期所有 printf 经互斥串行化。osMutexNew 在调度器未启动时允许调用。 */
+  g_uart1_mutex = osMutexNew(NULL);
 
   /* Start scheduler */
   osKernelStart();

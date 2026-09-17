@@ -25,7 +25,15 @@
 static USHORT usRegHolding[MODBUS_REG_HOLDING_NUM];
 
 /* ------------------------------------------------------------------ */
-/* 寄存器偏移 → 参数 ID（1 基址 usAddress → 偏移 = usAddress-1）        */
+/* 寄存器偏移 → 参数 ID（帧地址 0 基址，偏移 = usAddress-1）            */
+/*                                                                     */
+/* 坑（R34，2026-09-14 实证，勿再"修正"）：                            */
+/*   FreeModbus mbfuncholding.c 在调用 eMBRegHoldingCB 前内部执行       */
+/*   `usRegAddress++`（mbfuncholding.c:87/123/183/258），故回调收到     */
+/*   usAddress = 帧内地址字段 + 1。本函数用 usAddress-1 做偏移，         */
+/*   两项抵消后实际命中偏移 = 帧地址字段本身（0 基址）。                 */
+/*   因此 PC 访问 TH 必须发帧地址 0x0000，不是 0x0001；发 0x0001 会落到 */
+/*   ALARM，出现"合法值却被异常 0x02 拒"的假象（曾误判为越界/链路断）。  */
 /* ------------------------------------------------------------------ */
 static UCHAR reg_off_to_pid(USHORT off)
 {

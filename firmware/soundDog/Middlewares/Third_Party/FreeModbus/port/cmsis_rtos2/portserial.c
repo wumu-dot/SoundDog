@@ -1,7 +1,26 @@
+/* ==========================================================================
+ * 临时探针总开关（R35/R36）— 链路确诊前保留，确诊后整块删除。
+ *
+ * MB_PROBE_ENABLE = 1（默认）：保留 RX 回环 / RX 打印 / TX 翻灯 三处探针。
+ * MB_PROBE_ENABLE = 0        ：编译出纯净生产路径，探针代码不进固件。
+ *
+ * 覆盖方式：Makefile 的 C_DEFS 追加 -DMB_PROBE_ENABLE=0 即可，无需改本文件。
+ * 拆除条件（满足任一，必须立刻按 R36 删除三处探针体 + 本开关块）：
+ *   (a) RS485 物理链路确认打通（回环自测通过 + 主站读到合法应答）；
+ *   (b) 准备提交/发布任何固件。
+ * ========================================================================== */
+#ifndef MB_PROBE_ENABLE
+#define MB_PROBE_ENABLE             1
+#endif
+
 #include "port.h"
 #include "main.h"
 #include "cmsis_os2.h"
 #include "pin_config.h"   /* RS485_DE_PORT / RS485_DE_PIN (PD11) 权威定义 */
+#if MB_PROBE_ENABLE
+#include <stdio.h>        /* RX探针[临时] printf：随探针一并移除 */
+#include "rs485_drv.h"    /* RX回环探针[临时] RS485_Send：随探针一并移除 */
+#endif
 
 /* ----------------------- Modbus includes ----------------------------------*/
 #include "mb.h"
@@ -13,6 +32,15 @@ static int rx_index;
 static int put_index;
 static osThreadId_t receiveDataHandle;
 static osEventFlagsId_t xSerialEventHandle;
+/* P2-收帧栈 512→1024（审查缺陷）：收帧任务原 attr=NULL → 128字=512B，任务内跑 printf
+ * (MB_PROBE_ENABLE=1 时)对 512B 栈偏紧。扩容到 1024B，单位字节（cmsis_os2.c:475
+ * stack = attr->stack_size/sizeof(StackType_t)）。仅填 stack_size、priority 保持默认
+ * osPriorityNormal（osPriorityNone 会回落 Normal，cmsis_os2.c:449-466），不清默认。 */
+static const osThreadAttr_t receiveDataTask_attributes = {
+    .name = "mbRxRecv",
+    .stack_size = 1024,
+    /* priority 不填 → osPriorityNone → 回落 osPriorityNormal（保守） */
+};
 
 extern UART_HandleTypeDef huart3;
 
@@ -65,7 +93,7 @@ BOOL xMBPortSerialInit(UCHAR ucPORT, ULONG ulBaudRate, UCHAR ucDataBits,
     __HAL_UART_ENABLE_IT(&huart, UART_IT_RXNE);
     __HAL_UART_ENABLE_IT(&huart, UART_IT_TC);
     __HAL_UART_ENABLE_IT(&huart, UART_IT_IDLE);
-    receiveDataHandle = osThreadNew(handleReceivedDataTask, NULL, NULL);
+    receiveDataHandle = osThreadNew(handleReceivedDataTask, NULL, &receiveDataTask_attributes);
 
     return TRUE;
 }
@@ -113,6 +141,13 @@ BOOL xMBPortSerialPutByte(CHAR ucByte)
  */
 BOOL xMBPortSerialPutBytes(volatile UCHAR *ucByte, USHORT usSize)
 {
+#if MB_PROBE_ENABLE
+	/* TX探针[临时]（FEAT-A4-04 §3.7，R36）：进入此处 = FreeModbus 判定应答并经总线发送。
+	 * 判据：绿灯随主站轮询闪一次=从站发出应答；不闪=未进发送态。验证后移除。
+	 * 注意：GPIOB PIN_1 即 main.h:LED_STATUS（main.c 用它表示初始化成功），
+	 *       本翻转会破坏该灯语义，链路确诊后必须随探针整块删除。 */
+	HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_1);
+#endif
 	HAL_UART_Transmit_IT(&huart, (uint8_t *)ucByte, usSize);
 	return TRUE;
 }
@@ -157,7 +192,14 @@ void prvvUARTRxISR(void)
  */
 void prvvUARTRxReceiveCharISR(CHAR data)
 {
-    rx_buff[put_index++] = data;
+    /* P2-13（审查缺陷）：MODBUS ADU 上限恰为 256 字节，rx_buff 恰好无余量。
+     * 原 `rx_buff[put_index++] = data` 无边界判断——任何超过 256 字节的连续
+     * 字节流（噪声/误接线/主站异常长帧）都会越界写相邻 .bss。加范围判断，
+     * 满则静默丢弃（溢出流本就非法，丢弃比写穿更安全）。非探针派生，关
+     * MB_PROBE_ENABLE 后依然需要，属真正的生产路径缺陷。 */
+    if (put_index < (int)sizeof(rx_buff)) {
+        rx_buff[put_index++] = data;
+    }
 }
 
 /*
@@ -183,6 +225,34 @@ static void handleReceivedDataTask(void *argument)
         {
             (void)pxMBFrameCBByteReceived();   /* 内部经 xMBPortSerialGetByte 读 rx_buff[rx_index++] */
         }
+#if MB_PROBE_ENABLE
+        /* RX探针[临时]（FEAT-A4-04 §3.7，R36）：打印本帧收到的原始字节，验完整性/CRC。
+         * 判读：8字节`01 03 00 00 00 01 C4 0B`=帧完整；7字节/尾部缺=末字节被掐。验证后移除。
+         * 注意：本线程栈仅 512B（configMINIMAL_STACK_SIZE），printf 叠加栈溢出钩子未使能，
+         *       溢出将无告警直接 HardFault。 */
+        {
+            printf("RX[%d]:", put_index);
+            for (int i = 0; i < put_index; i++) printf(" %02X", (unsigned)rx_buff[i]);
+            printf("\r\n");
+        }
+        /* RX回环探针[临时]（R35/R36）：把刚收的字节原样经 RS485 回发。
+         * 原理：适配器发单字节(如 0x55)→FreeModbus 判坏帧丢弃(不产生应答)→总线上唯一回显
+         * 即本回环。适配器能读回自己的字节 = STM32↔适配器 双向链路+接线全通。
+         * 验证后随本探针一并移除。
+         *
+         * 【判读前提，务必遵守】本回环仅在「从站不产生应答」时才给出可判读结果。
+         * 若主站发的是合法 Modbus 帧，总线上会先后出现「回环 echo」+「真应答」两段，
+         * 主站一次读缓冲区将拼成一帧 → CRC 校验失败。故判链路请用单字节/坏 CRC 帧。
+         *
+         * 【对被测系统的扰动，判读时需计入】RS485_Send 内部是阻塞发送 + 忙等 TC，
+         * 期间 USART3 RXNE 中断仍使能（优先级 5，高于本任务），可继续写 rx_buff 并
+         * 递增 put_index；而下面第 206 行会把 put_index 强零 → 回环窗口内到达的新字节
+         * 被静默丢弃。故「回环成功但偶发丢帧」不等于硬件问题。 */
+        if (put_index > 0)
+        {
+            (void)RS485_Send((uint8_t *)rx_buff, (uint16_t)put_index);   /* 回发原始字节 */
+        }
+#endif
         put_index = 0;
         rx_index = 0;
     }
