@@ -10,11 +10,20 @@ echo "🔨 编译校验"
 
 # 自动检测构建系统
 if [ -f "$SRC_DIR/Makefile" ]; then
-    cd "$SRC_DIR" && make clean && make -j6 all
-    BUILD_OK=$?
+    # S1 修复（2026-09-19,复核更正）：原 `set -eu` 下 `make -j6 all` 为 `&&` 列表末命令,
+    # 一旦失败即整脚本退出 → `:26-33` 故障库检索分支对「编译真正失败」路径不可达(仅 cd/make clean
+    # 失败才触发,与设计意图相反)——分支路径错位。改 `if` 包裹:make all 失败不退出,继续走检索。
+    if ! ( cd "$SRC_DIR" && make clean && make -j6 all ); then
+        BUILD_OK=1
+    else
+        BUILD_OK=0
+    fi
 elif [ -f "$SRC_DIR/CMakeLists.txt" ]; then
-    cd "$SRC_DIR" && mkdir -p build && cd build && cmake .. && make -j6
-    BUILD_OK=$?
+    if ! ( cd "$SRC_DIR" && mkdir -p build && cd build && cmake .. && make -j6 ); then
+        BUILD_OK=1
+    else
+        BUILD_OK=0
+    fi
 elif [ -f "$SRC_DIR/.project" ] || [ -f "$SRC_DIR/.cproject" ]; then
     echo "  STM32CubeIDE 项目 — 请在 IDE 中编译，跳过命令行构建"
     BUILD_OK=0
