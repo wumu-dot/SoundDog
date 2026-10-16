@@ -45,6 +45,7 @@ Src/i2s.c \
 BSP/i2s_drv.c \
 Src/usart.c \
 BSP/rs485_drv.c \
+BSP/iwdg_drv.c \
 Src/stm32f4xx_it.c \
 Src/stm32f4xx_hal_msp.c \
 Src/stm32f4xx_hal_timebase_tim.c \
@@ -65,6 +66,7 @@ Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal.c \
 Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_exti.c \
 Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_i2s.c \
 Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_i2s_ex.c \
+Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_iwdg.c \
 Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_uart.c \
 Src/system_stm32f4xx.c \
 Middlewares/Third_Party/FreeRTOS/Source/croutine.c \
@@ -180,7 +182,8 @@ C_DEFS =  \
 -DUSE_HAL_DRIVER \
 -DSTM32F407xx \
 -DARM_MATH_CM4F \
--DHSE_VALUE=8000000U
+-DHSE_VALUE=8000000U \
+-DMB_PROBE_ENABLE=1
 
 
 # AS includes

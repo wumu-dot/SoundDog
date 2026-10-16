@@ -38,6 +38,7 @@
 #include "param.h"           /* A4-04: 参数范围宏 + param_apply 声明（Modbus 迁移后仍为校验单一源） */
 #include "mb.h"              /* A4-04 Modbus: eMBInit/eMBEnable/eMBPoll */
 #include "modbus_app.h"      /* A4-04 Modbus: 从站寄存器回调所在模块 */
+#include "iwdg_drv.h"        /* A7-02: 独立喂狗任务 IWDG_DRV_Init/Refresh（仅任务上下文） */
 #include <string.h>
 #include <stdio.h>
 #include <stdbool.h>
@@ -97,6 +98,16 @@ static const osThreadAttr_t modbusSlaveTask_attributes = {
   .stack_size = 256 * 4,              /* 1KB */
   .priority = (osPriority_t) osPriorityNormal,
 };
+
+/* A7-02：独立看门狗喂狗任务（IWDG 超时 1s，喂狗周期 200ms → 留 >30% 余量）
+ * 优先级取 osPriorityAboveNormal（≥ 音频 task 的 Normal），防被饿死长期抢占；
+ * 栈 1KB（HAL_IWDG_Refresh 调用链开销极小）。仅本任务喂狗，ISR 严禁喂。 */
+static osThreadId_t wdtTaskHandle;
+static const osThreadAttr_t wdtTask_attributes = {
+  .name = "wdt",
+  .stack_size = 256 * 4,              /* 1KB */
+  .priority = (osPriority_t) osPriorityAboveNormal,
+};
 /* USER CODE END Variables */
 /* Definitions for defaultTask */
 osThreadId_t defaultTaskHandle;
@@ -111,6 +122,7 @@ const osThreadAttr_t defaultTask_attributes = {
 static void SpecTask(void *argument);
 static void DisplayTask(void *argument);
 static void MBSlavePollTask(void *argument);
+static void WDTPollTask(void *argument);   /* A7-02: 独立喂狗任务 */
 /* A3-02 帧率口径修正：mfcc 出帧回调（specTask 上下文，逐帧 Mel 消费） */
 static void mel_frame_cb(const float32_t *frame400);
 /* A4-04: 参数校验生效（modbus_app.c 经 Modbus 寄存器写路径调用；实现见明细） */
@@ -161,6 +173,8 @@ void MX_FREERTOS_Init(void) {
    * eMBInit/eMBEnable 在任务内惰性执行，确保在 osKernelRunning 后调用
    * （porttimer/portevent 用 osTimerNew/osEventFlagsNew，需 RTOS 上下文）。 */
   modbusSlaveTaskHandle = osThreadNew(MBSlavePollTask, NULL, &modbusSlaveTask_attributes);
+  /* A7-02：独立喂狗任务（任务上下文调 IWDG_DRV_Init 惰性启动 + 周期 Refresh） */
+  wdtTaskHandle = osThreadNew(WDTPollTask, NULL, &wdtTask_attributes);
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -663,6 +677,29 @@ static void DisplayTask(void *argument)
     OLED_DrawSpectrum(bands32);
     /* I2C 错误打印已移至 specTask（评审 Important#2：USART1 单写者，
      * BUG-003 规则——本任务不得写串口） */
+    osDelay(200);
+  }
+}
+
+/* ---- FEAT-A7-02: 独立看门狗喂狗任务 ----
+ * 红线圈：喂狗只能在【任务上下文】调用，ISR 严禁喂（中断活着不代表主流程活着，
+ * ISR 喂会掩盖死机使看门狗失去意义）。
+ * 惰性启动：在任务上下文首次执行 IWDG_DRV_Init（启动计数），随即便在 200ms
+ * 循环内 Refresh——规避"使能早于首喂 → 烧录即循环复位"坑。
+ * 喂狗周期 200ms << IWDG 超时 1s（留 >30% 余量，并容纳 LSI ±7% 漂移与调度抖动）。 */
+static void WDTPollTask(void *argument)
+{
+  (void)argument;
+
+  if (IWDG_DRV_Init() != 0) {
+    /* 初始化失败也回调 HAL_OK 多半不可能（HAL_IWDG_Init 校验失败才可能），
+     * 此处打日志定位即可，不阻塞（看门狗若未启动也无复位风险）。 */
+    printf("WDT init fail\r\n");
+  }
+
+  for (;;)
+  {
+    (void)IWDG_DRV_Refresh();
     osDelay(200);
   }
 }
