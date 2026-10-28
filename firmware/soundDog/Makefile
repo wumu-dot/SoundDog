@@ -37,15 +37,12 @@ BUILD_DIR = build
 # C sources
 C_SOURCES =  \
 App/main.c \
+BSP/sht30.c \
 Src/gpio.c \
 App/freertos.c \
-App/rtos_hooks.c \
 Src/dma.c \
 Src/i2s.c \
-BSP/i2s_drv.c \
 Src/usart.c \
-BSP/rs485_drv.c \
-BSP/iwdg_drv.c \
 Src/stm32f4xx_it.c \
 Src/stm32f4xx_hal_msp.c \
 Src/stm32f4xx_hal_timebase_tim.c \
@@ -66,7 +63,6 @@ Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal.c \
 Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_exti.c \
 Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_i2s.c \
 Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_i2s_ex.c \
-Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_iwdg.c \
 Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_uart.c \
 Src/system_stm32f4xx.c \
 Middlewares/Third_Party/FreeRTOS/Source/croutine.c \
@@ -80,52 +76,7 @@ Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2/cmsis_os2.c \
 Middlewares/Third_Party/FreeRTOS/Source/portable/MemMang/heap_4.c \
 Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F/port.c \
 Src/sysmem.c \
-Src/syscalls.c \
-BSP/fft.c \
-BSP/spectrum.c \
-BSP/mfcc.c \
-BSP/mel.c \
-BSP/mfcc_dct.c \
-BSP/model_normal.c \
-BSP/dist.c \
-BSP/debounce.c \
-App/modbus_app.c \
-Middlewares/Third_Party/FreeModbus/modbus/mb.c \
-Middlewares/Third_Party/FreeModbus/modbus/rtu/mbrtu.c \
-Middlewares/Third_Party/FreeModbus/modbus/rtu/mbcrc.c \
-Middlewares/Third_Party/FreeModbus/modbus/functions/mbfunccoils.c \
-Middlewares/Third_Party/FreeModbus/modbus/functions/mbfuncdiag.c \
-Middlewares/Third_Party/FreeModbus/modbus/functions/mbfuncdisc.c \
-Middlewares/Third_Party/FreeModbus/modbus/functions/mbfuncholding.c \
-Middlewares/Third_Party/FreeModbus/modbus/functions/mbfuncinput.c \
-Middlewares/Third_Party/FreeModbus/modbus/functions/mbfuncother.c \
-Middlewares/Third_Party/FreeModbus/modbus/functions/mbutils.c \
-Middlewares/Third_Party/FreeModbus/port/cmsis_rtos2/portserial.c \
-Middlewares/Third_Party/FreeModbus/port/cmsis_rtos2/porttimer.c \
-Middlewares/Third_Party/FreeModbus/port/cmsis_rtos2/portevent.c \
-Middlewares/Third_Party/FreeModbus/port/cmsis_rtos2/portcritical.c \
-Src/i2c.c \
-BSP/oled_drv.c \
-Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_i2c.c \
-Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_i2c_ex.c \
-../cmsis-dsp/repo/Source/TransformFunctions/arm_rfft_fast_f32.c \
-../cmsis-dsp/repo/Source/TransformFunctions/arm_rfft_fast_init_f32.c \
-../cmsis-dsp/repo/Source/TransformFunctions/arm_cfft_f32.c \
-../cmsis-dsp/repo/Source/TransformFunctions/arm_cfft_radix8_f32.c \
-../cmsis-dsp/repo/Source/TransformFunctions/arm_cfft_init_f32.c \
-../cmsis-dsp/repo/Source/TransformFunctions/arm_bitreversal2.c \
-../cmsis-dsp/repo/Source/CommonTables/arm_common_tables.c \
-../cmsis-dsp/repo/Source/CommonTables/arm_const_structs.c \
-../cmsis-dsp/repo/Source/ComplexMathFunctions/arm_cmplx_mag_f32.c \
-../cmsis-dsp/repo/Source/FastMathFunctions/arm_sin_f32.c \
-../cmsis-dsp/repo/Source/FastMathFunctions/arm_cos_f32.c \
-../cmsis-dsp/repo/Source/BasicMathFunctions/arm_mult_f32.c \
-../cmsis-dsp/repo/Source/BasicMathFunctions/arm_dot_prod_f32.c \
-../cmsis-dsp/repo/Source/BasicMathFunctions/arm_scale_f32.c \
-../cmsis-dsp/repo/Source/BasicMathFunctions/arm_offset_f32.c \
-../cmsis-dsp/repo/Source/FastMathFunctions/arm_vlog_f32.c \
-../cmsis-dsp/repo/Source/SupportFunctions/arm_copy_f32.c \
-../cmsis-dsp/repo/Source/SupportFunctions/arm_fill_f32.c
+Src/syscalls.c
 
 # ASM sources
 ASM_SOURCES =  \
@@ -181,9 +132,7 @@ AS_DEFS =
 C_DEFS =  \
 -DUSE_HAL_DRIVER \
 -DSTM32F407xx \
--DARM_MATH_CM4F \
--DHSE_VALUE=8000000U \
--DMB_PROBE_ENABLE=1
+-DHSE_VALUE=8000000U
 
 
 # AS includes
@@ -210,11 +159,10 @@ C_INCLUDES =  \
 -IMiddlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2 \
 -IMiddlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F \
 -IDrivers/CMSIS/Device/ST/STM32F4xx/Include \
--IDrivers/CMSIS/Include \
--I../cmsis-dsp/repo/Include \
--IMiddlewares/Third_Party/FreeModbus/modbus/include \
--IMiddlewares/Third_Party/FreeModbus/modbus/rtu \
--IMiddlewares/Third_Party/FreeModbus/port
+-IDrivers/CMSIS/Include
+
+# 手写源码/头文件路径/编译宏（CubeMX 不生成；重新 GENERATE CODE 后只需恢复本行）
+include sources.mk
 
 
 # compile gcc flags
@@ -260,15 +208,15 @@ vpath %.S $(sort $(dir $(ASMM_SOURCES)))
 OBJECTS += $(addprefix $(BUILD_DIR)/,$(notdir $(ASMMC_SOURCES:.c=.o)))
 vpath %.S $(sort $(dir $(ASMMC_SOURCES)))
 
-$(BUILD_DIR)/%.o: %.c Makefile | $(BUILD_DIR) 
+$(BUILD_DIR)/%.o: %.c Makefile sources.mk | $(BUILD_DIR) 
 	$(CC) -c $(CFLAGS) -Wa,-a,-ad,-alms=$(BUILD_DIR)/$(notdir $(<:.c=.lst)) $< -o $@
 
-$(BUILD_DIR)/%.o: %.s Makefile | $(BUILD_DIR)
+$(BUILD_DIR)/%.o: %.s Makefile sources.mk | $(BUILD_DIR)
 	$(AS) -c $(CFLAGS) $< -o $@
-$(BUILD_DIR)/%.o: %.S Makefile | $(BUILD_DIR)
+$(BUILD_DIR)/%.o: %.S Makefile sources.mk | $(BUILD_DIR)
 	$(AS) -c $(CFLAGS) $< -o $@
 
-$(BUILD_DIR)/$(TARGET).elf: $(OBJECTS) Makefile
+$(BUILD_DIR)/$(TARGET).elf: $(OBJECTS) Makefile sources.mk
 	$(CC) $(OBJECTS) $(LDFLAGS) -o $@
 	$(SZ) $@
 
@@ -278,8 +226,13 @@ $(BUILD_DIR)/%.hex: $(BUILD_DIR)/%.elf | $(BUILD_DIR)
 $(BUILD_DIR)/%.bin: $(BUILD_DIR)/%.elf | $(BUILD_DIR)
 	$(BIN) $< $@	
 	
+ifeq ($(OS),Windows_NT)
 $(BUILD_DIR):
-	mkdir -p $@		
+	-if not exist $(BUILD_DIR) mkdir $(BUILD_DIR)
+else
+$(BUILD_DIR):
+	mkdir -p $@
+endif	
 
 #######################################
 # clean up
