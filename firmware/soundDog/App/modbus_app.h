@@ -23,8 +23,10 @@
 extern "C" {
 #endif
 
-/* 保持寄存器数量（1..5，与 A4-04 §1.4a 表并列，禁止自造） */
-#define MODBUS_REG_HOLDING_NUM   5u
+/* 保持寄存器数量（与下面映射表并列，禁止自造）
+ * 2026-10-24 由 5 扩到 9：新增 4 个【只读】遥测量。
+ * ⚠️ 必须与网关侧 MASTER_PARAM_CNT 同步修改，否则整轮读越界。 */
+#define MODBUS_REG_HOLDING_NUM   9u
 
 #ifdef __cplusplus
 }

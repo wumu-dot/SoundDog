@@ -29,6 +29,7 @@
 #include "audio_pipe.h"        /* A2-02: frame_msg_t + audio_queue_get() */
 #include "spectrum.h"        /* A2-02: spec_process + 峰值/噪声底 getter */
 #include "oled_drv.h"        /* A2-03: OLED_DrawSpectrum + 错误计数 */
+#include "sht30.h"           /* A7-01: SHT30 温湿度（I2C3）轮询任务 */
 #include "usart.h"           /* A2-04: huart1（BANDS 行直接 Transmit） */
 #include "mfcc.h"            /* A3-01: 预加重+分帧+汉明窗旁路 */
 #include "mel.h"             /* A3-02: Mel 滤波器组（512 rfft + 32 维能量） */
@@ -108,6 +109,16 @@ static const osThreadAttr_t wdtTask_attributes = {
   .stack_size = 256 * 4,              /* 1KB */
   .priority = (osPriority_t) osPriorityAboveNormal,
 };
+/* A7-01：SHT30 温湿度轮询任务
+ * ⚠️ 独立任务（不在 Modbus 回调内），内部含 vTaskDelay 等测量完成，
+ *    不阻塞协议栈（守 P0-3：临界区之外不新增 Modbus 锁嵌套）。
+ * 栈 512B：仅 HAL I2C 阻塞调用 + 一个 6B 接收缓冲，深度很浅。 */
+static osThreadId_t sht30TaskHandle;
+static const osThreadAttr_t sht30Task_attributes = {
+  .name = "sht30",
+  .stack_size = 512 * 4,              /* 2KB（HAL I2C 调用链留余量） */
+  .priority = (osPriority_t) osPriorityBelowNormal,
+};
 /* USER CODE END Variables */
 /* Definitions for defaultTask */
 osThreadId_t defaultTaskHandle;
@@ -175,6 +186,15 @@ void MX_FREERTOS_Init(void) {
   modbusSlaveTaskHandle = osThreadNew(MBSlavePollTask, NULL, &modbusSlaveTask_attributes);
   /* A7-02：独立喂狗任务（任务上下文调 IWDG_DRV_Init 惰性启动 + 周期 Refresh） */
   wdtTaskHandle = osThreadNew(WDTPollTask, NULL, &wdtTask_attributes);
+  /* A7-01：SHT30 温湿度任务（I2C3 PA8/PC9，2 s 周期刷新 g_temp_x10/g_humi_x10）
+   * 惰性 init：任务首次循环内 sht30_init()，避免 osKernelRunning 前调 HAL_I2C_Init。
+   * ⚠️【2026-10-25 临时禁用】烧入后从站进入复位循环（OLED 反复播放开机动画、
+   *    红灯不亮），而 portserial.c 的应答延时代码本身已改为忙等且不影响启动。
+   *    ⇒ 首要嫌疑即本任务。禁用后重烧验证；确认后再排查根因（疑似
+   *    HAL_I2C_Init 在任务上下文首次调用时的栈深 / I2C3 时钟未就绪）。
+   *    恢复方法：取消下面一行注释即可。 */
+  /* sht30TaskHandle = osThreadNew(sht30_task, NULL, &sht30Task_attributes); */
+  (void)sht30TaskHandle;
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */

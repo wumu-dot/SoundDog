@@ -18,6 +18,14 @@
 #include "modbus_app.h"
 #include "debounce.h"       /* debounce_get_param / debounce_set_params / DB_WIN_LEN */
 #include "param.h"          /* PARAM_ID_* / PARAM_* 范围宏（单一校验源） */
+#include "sht30.h"          /* g_temp_x10 / g_humi_x10（I2C3 温湿度，只读遥测） */
+
+/* ------------------------------------------------------------------ */
+/* 振动遥测量（只读）—— MPU6050（I2C2）尚未接入，当前恒 0               */
+/* 接入后改为 extern，由 mpu6050 驱动刷新                              */
+/* ------------------------------------------------------------------ */
+volatile uint16_t g_vib_rms  = 0u;
+volatile uint16_t g_vib_peak = 0u;
 
 /* ------------------------------------------------------------------ */
 /* 静态：保持寄存器快照缓冲（仅读路径转储用）                          */
@@ -89,6 +97,18 @@ eMBErrorCode eMBRegHoldingCB(UCHAR *pucRegBuffer, USHORT usAddress,
     usRegHolding[2] = p.consec_norm_release;
     usRegHolding[3] = (USHORT)DB_WIN_LEN;   /* 固定=100 */
     usRegHolding[4] = p.win_anom_cnt;
+
+    /* ---- 0x0005..0x0008：只读遥测量（2026-10-24 新增，5→9） ----
+     * [5] 温度 ×10 + 500 偏移（253+500=753 表示 25.3℃；-45℃ → 5）
+     * [6] 湿度 ×10（612 = 61.2 %RH）
+     * [7] 振动 RMS（mg）—— 待 MPU6050 接入，当前恒 0
+     * [8] 振动峰值（mg）—— 同上
+     * ⚠️ 这四个 off 在 reg_off_to_pid() 里落到 default → 返回 0xFF
+     *    ⇒ 写操作被 MB_ENOREG 拒绝（只读属性由此天然生效，无需额外代码）。 */
+    usRegHolding[5] = (USHORT)(g_temp_x10 + 500);
+    usRegHolding[6] = (USHORT)g_humi_x10;
+    usRegHolding[7] = (USHORT)g_vib_rms;
+    usRegHolding[8] = (USHORT)g_vib_peak;
 
     for (USHORT i = 0u; i < usNRegs; i++)
     {
