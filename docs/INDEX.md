@@ -55,6 +55,11 @@
 | `bugs/BUG-20260829-005-*.md` | OLED 手拼 I2C 控制字节帧违反手册，静默乱码（P1） |
 | `bugs/BUG-20260829-006-*.md` | 调度器前 xQueueCreate 残留 BASEPRI→SysTick 灭→HAL_Delay 死循环（P0，OLED 黑屏真根因） |
 | `bugs/BUG-20260830-001-*.md` | gdb detach 遗留停机态被误诊为固件挂死（P0 流程事故；沉淀 oocd_probe.ps1 非侵入探针） |
+| `bugs/BUG-20260901-001-*.md` | CRC16 校验向量自造错误（0xF4D7/低字节先发 → 实为 0x1327/大端） |
+| `bugs/BUG-20260902-001-*.md` | RS485 自发自收回环 HAL_TIMEOUT：预调度器期 SysTick 屏蔽 + 单 EN 半双工不可自发自收 |
+| `bugs/BUG-20260914-001-*.md` | FreeModbus 保持寄存器帧地址 off-by-one → 假"越界 0x02/链路断" |
+| `bugs/BUG-20260927-001-*.md` | OLED 偶发上电黑屏/灰屏但 I2C init 始终 OK，指向模块供电/电荷泵物理层 |
+| `bugs/BUG-20261029-001-*.md` | 启用 sht30 后启动即复位循环：FreeRTOS 堆池耗尽，缺口仅 600 B（P0；含"钩子关中断+IWDG"与"改 .ld 不重链"两条通用教训） |
 | `../firmware/flash_isp.bat` | ISP 串口救砖烧录（BOOT0 + USART1） |
 | `../firmware/check_doc.bat` | DOC-STATE 漂移检测（双击运行） |
 | `../firmware/check_doc_fix.bat` | DOC-STATE 漂移自动修复（双击运行） |
