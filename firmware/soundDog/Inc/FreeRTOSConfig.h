@@ -68,15 +68,50 @@
 #define configTICK_RATE_HZ                       ((TickType_t)1000)
 #define configMAX_PRIORITIES                     ( 56 )
 #define configMINIMAL_STACK_SIZE                 ((uint16_t)128)
-/* 堆 15360 → 24576（2026-10-29）。
- * 原因：启用 sht30 任务后启动即进入复位循环，串口抓到
- *   [FATAL] FreeRTOS heap allocation FAILED（rtos_hooks.c:38 vApplicationMallocFailedHook
- *   → 关中断死循环 → IWDG 约 1 s 复位），即 osThreadNew 时堆已耗尽。
- * 账目：6 个任务栈请求 = default 512 + spec 2048 + display 4096 + mbSlave 1024
- *   + wdt 1024 + sht30 2048 = 10752 B，另需 6×(TCB 92B + heap_4 块头 8B) ≈ 600 B，
- *   再扣 FreeModbus 的 osEventFlags/osTimer 与音频帧队列 ⇒ 15360 不够。
- * 余量：RAM 128 KB，改动前 data+bss=98352 B，+9216 后约 107568 B，仍余约 22 KB
- *   （含主栈 1 KB 与 _Min_Heap_Size）。⛔ 不要再挤到 20 KB 以下。 */
+/* ============================================================================
+ * FreeRTOS 堆池大小 —— 调之前先把下面这段读完（2026-10-29 实测更新）
+ * ============================================================================
+ * 【为什么是 24576】原值 15360 时，启用 sht30 任务后启动即进入复位循环：
+ *   串口打 [FATAL] FreeRTOS heap allocation FAILED（rtos_hooks.c:38）⇒ 关中断死循环
+ *   ⇒ IWDG 约 1 s 复位 ⇒ 约 3 s 一圈。注意：这不是"堆被写坏"，是**池子用完**，
+ *   vApplicationMallocFailedHook 的触发条件只是 pvPortMalloc 找不到够大的空闲块。
+ *
+ * 【实测账目】SWD 直读 heap_4 的 xFreeBytesRemaining（不是估算）：
+ *   池 24576 − 空闲 8616 = **实际占用 15960 B**，且 xMinimumEverFree 与当前值相等
+ *   ⇒ 启动后从未释放。原配置 15360 ⇒ **缺口仅 600 B**。
+ *
+ * 【占用构成】7 个任务栈 = 11776 B（73.8%）：
+ *     display 4096 ｜ spec 2048 ｜ sht30 2048 ｜ mbSlave 1024
+ *     ｜ wdt 1024 ｜ **mbRxRecv 1024** ｜ default 512
+ *   ⚠️ mbRxRecv 不在 MX_FREERTOS_Init 里，它由 eMBInit → portserial.c:77 的
+ *      osThreadNew 创建。**算堆账漏掉它是最容易犯的错**（2026-10-29 已犯过一次）。
+ *   其余 4184 B = 7×TCB + 音频队列(4×frame_msg_t=1040) + 2 个事件组 + 1 个定时器
+ *   + heap_4 块头与对齐。
+ *
+ * 【真实失败点】不是任务创建 —— 6 个任务全建成、调度器已启动；是运行期
+ *   eMBInit 里分配 mbRxRecv 那 1024 B 时失败。旁证：故障日志中
+ *   "FreeModbus slave enabled on USART3" 出现 0 次，且红灯 PB0 不亮。
+ *
+ * 【还要加任务时，先看这里】RAM 128 KB 被切成四块，其中两块长期空转：
+ *   ┌ .bss 54060（含本堆池 24576 + FFT 表/缓冲 29484）
+ *   ├ ._user_heap_stack 53252 = _Min_Heap_Size **49152**（newlib malloc 堆）
+ *   │                          + _Min_Stack_Size 4096（主栈/MSP，ISR 用它）
+ *   ├ .ccmram 0 —— 64 KB CCM 一个字节没用（0x10000000，⚠️ DMA 访问不到，别放 I/O 缓冲）
+ *   └ 余量 23504（主栈上方）
+ *
+ * ⭐ **第一顺位扩容来源 = 那 49152 B 的 newlib 堆**（STM32F407XX_FLASH.ld:58
+ *    _Min_Heap_Size = 0xC000）。工程内 App/BSP/Src **零 malloc/calloc/realloc/free**
+ *    调用，动态内存全部走 pvPortMalloc ⇒ 这块基本是沉积资源。
+ *    要动就把它降到 0x400，回收约 47 KB 并入本宏。
+ *    ⛔ 前提：任何人不得引入依赖 newlib malloc 的调用（printf("%f") 的浮点转换、
+ *       strdup、部分库函数）。引入前必须复核本注释。
+ * ⛔ **不要动 _Min_Stack_Size(4096)** —— 任务栈之外，所有 ISR 仍跑在这块 MSP 上。
+ *
+ * 【加完任务怎么验】别拍脑袋加 8 KB，用两条命令读真值：
+ *   arm-none-eabi-nm build/soundDog.elf | grep -E "xFreeBytesRemaining|xMinimumEver"
+ *   STM32_Programmer_CLI -c port=SWD -r32 0x<两变量地址> 8   # 各 4 B，读完必须 -rst
+ *   判据：空闲 < 30% ⇒ 该考虑扩容，而不是等它复位。
+ * ========================================================================== */
 #define configTOTAL_HEAP_SIZE                    ((size_t)24576)
 #define configMAX_TASK_NAME_LEN                  ( 16 )
 #define configUSE_TRACE_FACILITY                 1
