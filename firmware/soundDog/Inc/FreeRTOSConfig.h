@@ -68,7 +68,16 @@
 #define configTICK_RATE_HZ                       ((TickType_t)1000)
 #define configMAX_PRIORITIES                     ( 56 )
 #define configMINIMAL_STACK_SIZE                 ((uint16_t)128)
-#define configTOTAL_HEAP_SIZE                    ((size_t)15360)
+/* 堆 15360 → 24576（2026-10-29）。
+ * 原因：启用 sht30 任务后启动即进入复位循环，串口抓到
+ *   [FATAL] FreeRTOS heap allocation FAILED（rtos_hooks.c:38 vApplicationMallocFailedHook
+ *   → 关中断死循环 → IWDG 约 1 s 复位），即 osThreadNew 时堆已耗尽。
+ * 账目：6 个任务栈请求 = default 512 + spec 2048 + display 4096 + mbSlave 1024
+ *   + wdt 1024 + sht30 2048 = 10752 B，另需 6×(TCB 92B + heap_4 块头 8B) ≈ 600 B，
+ *   再扣 FreeModbus 的 osEventFlags/osTimer 与音频帧队列 ⇒ 15360 不够。
+ * 余量：RAM 128 KB，改动前 data+bss=98352 B，+9216 后约 107568 B，仍余约 22 KB
+ *   （含主栈 1 KB 与 _Min_Heap_Size）。⛔ 不要再挤到 20 KB 以下。 */
+#define configTOTAL_HEAP_SIZE                    ((size_t)24576)
 #define configMAX_TASK_NAME_LEN                  ( 16 )
 #define configUSE_TRACE_FACILITY                 1
 #define configUSE_16_BIT_TICKS                   0

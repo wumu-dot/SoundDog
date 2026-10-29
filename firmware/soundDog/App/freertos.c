@@ -188,12 +188,18 @@ void MX_FREERTOS_Init(void) {
   wdtTaskHandle = osThreadNew(WDTPollTask, NULL, &wdtTask_attributes);
   /* A7-01：SHT30 温湿度任务（I2C3 PA8/PC9，2 s 周期刷新 g_temp_x10/g_humi_x10）
    * 惰性 init：任务首次循环内 sht30_init()，避免 osKernelRunning 前调 HAL_I2C_Init。
-   * ⚠️【2026-10-25 临时禁用】烧入后从站进入复位循环（OLED 反复播放开机动画、
-   *    红灯不亮），而 portserial.c 的应答延时代码本身已改为忙等且不影响启动。
-   *    ⇒ 首要嫌疑即本任务。禁用后重烧验证；确认后再排查根因（疑似
-   *    HAL_I2C_Init 在任务上下文首次调用时的栈深 / I2C3 时钟未就绪）。
-   *    恢复方法：取消下面一行注释即可。 */
-  /* sht30TaskHandle = osThreadNew(sht30_task, NULL, &sht30Task_attributes); */
+   * ⚠️【2026-10-25 曾临时禁用】烧入后从站进入复位循环（OLED 反复播放开机动画、
+   *    红灯不亮）⇒ 首要嫌疑即本任务，先禁用把主线让出来，根因当时未查实。
+   * 🔴【2026-10-28 重新启用】按用户指示去注释。启用前的静态核查结论：
+   *    ① R20 引脚：PA8/PC9 仅出现在 Src/gpio.c 的"未用引脚置模拟态"列表，
+   *       无其他外设占用，sht30_gpio_i2c3_init() 后置重配为 AF4 安全；
+   *    ② HAL_I2C_MspInit(Src/i2c.c:33) 只处理 I2C1，I2C3 由驱动自备时钟/引脚，
+   *       与该文件注释一致，不存在"以为会被初始化其实没有"的缺口；
+   *    ③ wdt 任务优先级 AboveNormal 高于本任务 BelowNormal ⇒
+   *       HAL_I2C 忙等不会饿死喂狗（IWDG 1 s 超时可排除为复位主因）。
+   *    ⇒ 若启用后仍复位，优先查 sht30_init() 返回值与 I2C3 实际波形，
+   *      不要直接下"任务不能用"的结论。 */
+  sht30TaskHandle = osThreadNew(sht30_task, NULL, &sht30Task_attributes);
   (void)sht30TaskHandle;
   /* USER CODE END RTOS_THREADS */
 
