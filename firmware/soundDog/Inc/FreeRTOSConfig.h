@@ -106,9 +106,14 @@
  *   - 它的真实作用：**给"堆 + 栈"的总和设一个静态预算**，链接时若 .bss 之后
  *     剩不下 48 KB+4 KB 就报错；同时保证运行期 malloc 有地方长，不会一头撞进栈。
  *   - 为什么 CubeMX 留 0x200、本工程留 0xC000：后者是建仓时（首个提交 4987512）
- *     手工设的，为"可能要用 malloc"留的余量。**本工程从未用过**：
- *     App/BSP/Src 零 `malloc/calloc/realloc/free`；`_isatty` 返回 1（`Src/syscalls.c:106`）
- *     ⇒ stdout 行缓冲用 newlib 内部 1 字节 `_nbuf`，也不 malloc；printf 只用 %u/%d/%s。
+ *     手工设的，为"可能要用 malloc"留的余量。
+ *   - ⚠️ **本工程并非"零 malloc"**（2026-10-29 SWD 实测更正）：
+ *     工程代码确实零调用（App/BSP/Src 无 malloc/calloc/realloc/free），
+ *     但 **stdio 路径用了一次**：`__sbrk_heap_end` = 0x2000D838，比 `_end`(0x2000D430)
+ *     多出 **0x408 = 1,032 B**（≈ malloc(1024) + 8 B 管理头），首次输出时发生，
+ *     之后 25 s 连续 printf 复测**不再增长**。
+ *     ⇒ **`_Min_Heap_Size` 不能降到 0x400(1024)**——这次就要 1,032，会刚好卡死；
+ *       要降就 0x800(2048) 起步。
  *
  * ⭐ **所以要扩本宏，第一步不是改链接脚本**：
  *   约束是 `_ebss + _Min_Heap_Size + _Min_Stack_Size ≤ _estack`
