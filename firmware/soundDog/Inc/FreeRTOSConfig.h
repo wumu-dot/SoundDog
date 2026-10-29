@@ -92,19 +92,31 @@
  *   eMBInit 里分配 mbRxRecv 那 1024 B 时失败。旁证：故障日志中
  *   "FreeModbus slave enabled on USART3" 出现 0 次，且红灯 PB0 不亮。
  *
- * 【还要加任务时，先看这里】RAM 128 KB 被切成四块，其中两块长期空转：
- *   ┌ .bss 54060（含本堆池 24576 + FFT 表/缓冲 29484）
- *   ├ ._user_heap_stack 53252 = _Min_Heap_Size **49152**（newlib malloc 堆）
- *   │                          + _Min_Stack_Size 4096（主栈/MSP，ISR 用它）
+ * 【还要加任务时，先看这里】RAM 128 KB 当前是这样切的（`size -A` + `nm` 实测）：
+ *   ┌ .data 256 ｜ .bss 54060（含本堆池 24576 + FFT 表/缓冲 29484）  ← 到此 0x2000D430
+ *   ├ ._user_heap_stack 53252 —— **无内容段，不占任何字节**，只是把位置计数器
+ *   │    往上推 0xC000(49152) + 0x1000(4096)，用来做**链接期 RAM 预算检查**
  *   ├ .ccmram 0 —— 64 KB CCM 一个字节没用（0x10000000，⚠️ DMA 访问不到，别放 I/O 缓冲）
- *   └ 余量 23504（主栈上方）
+ *   └ 到 _estack(0x20020000) 还剩 **23504 B** 真空白（也是 MSP 的额外生长空间）
  *
- * ⭐ **第一顺位扩容来源 = 那 49152 B 的 newlib 堆**（STM32F407XX_FLASH.ld:58
- *    _Min_Heap_Size = 0xC000）。工程内 App/BSP/Src **零 malloc/calloc/realloc/free**
- *    调用，动态内存全部走 pvPortMalloc ⇒ 这块基本是沉积资源。
- *    要动就把它降到 0x400，回收约 47 KB 并入本宏。
- *    ⛔ 前提：任何人不得引入依赖 newlib malloc 的调用（printf("%f") 的浮点转换、
- *       strdup、部分库函数）。引入前必须复核本注释。
+ * ⭐⭐ **`_Min_Heap_Size` 的语义，别理解错**（`STM32F407XX_FLASH.ld:58`，0xC000）：
+ *   - 它**不是**"划给 newlib malloc 的 48 KB"，**不占任何内存**（该段无 CONTENTS）；
+ *   - 它**不是** malloc 的天花板 —— `Src/sysmem.c:56` 的 `_sbrk` 用的上界是
+ *     `_estack - _Min_Stack_Size` = 0x2001F000，即 malloc 实际能用约 **71 KB**；
+ *   - 它的真实作用：**给"堆 + 栈"的总和设一个静态预算**，链接时若 .bss 之后
+ *     剩不下 48 KB+4 KB 就报错；同时保证运行期 malloc 有地方长，不会一头撞进栈。
+ *   - 为什么 CubeMX 留 0x200、本工程留 0xC000：后者是建仓时（首个提交 4987512）
+ *     手工设的，为"可能要用 malloc"留的余量。**本工程从未用过**：
+ *     App/BSP/Src 零 `malloc/calloc/realloc/free`；`_isatty` 返回 1（`Src/syscalls.c:106`）
+ *     ⇒ stdout 行缓冲用 newlib 内部 1 字节 `_nbuf`，也不 malloc；printf 只用 %u/%d/%s。
+ *
+ * ⭐ **所以要扩本宏，第一步不是改链接脚本**：
+ *   约束是 `_ebss + _Min_Heap_Size + _Min_Stack_Size ≤ _estack`
+ *   ⇒ 当前 `_ebss`=0x2000D430，到 _estack 余 23,504 B
+ *   ⇒ **本宏最多能加到 24576+23504 ≈ 48000 而不动 .ld**。
+ *   只有要超过这个数，才需要把 `_Min_Heap_Size` 降下来（如 0x800）。
+ *   ⚠️ 降它的代价：万一将来引入 newlib malloc 且用量大，堆可能长到与栈相撞
+ *      （`_sbrk` 只跟"栈的保留下限"比，不跟当前 SP 比）—— 那块预算就是防这个的。
  * ⛔ **不要动 _Min_Stack_Size(4096)** —— 任务栈之外，所有 ISR 仍跑在这块 MSP 上。
  *
  * 【加完任务怎么验】别拍脑袋加 8 KB，用两条命令读真值：
