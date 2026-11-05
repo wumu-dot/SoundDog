@@ -155,6 +155,8 @@
 | `firmware/soundDog/Makefile` | 修改 | C_SOURCES 补协议源文件（BUG-002 教训） |
 | A5-01 rs485 驱动调用点 | 修改 | 收发数据接入协议层 |
 
+> **实施结果（2026-11-01 回填）**：上表的 `proto_drv.c/.h` **未创建**。2026-09-08 阶段2 经人确认废弃 0xA5/0x5A 自定义帧，改 **Modbus RTU**，帧打包/解析由 `Middlewares/Third_Party/FreeModbus/` + `App/modbus_app.c` 承担（见 FEAT-A4-04 及其阶段4 实测 BUG-20260914-001）。本 FEAT 的验收项实际由 FEAT-A4-04 覆盖。
+
 ### 5.2 调试要点
 - 帧格式与 CRC16 参数以 §3.1 人确认记录为准，两端（板端/PC 端）必须一致
 - 调试打印走 USART1（115200），协议数据走 USART3（115200）

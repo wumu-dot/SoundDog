@@ -20,7 +20,7 @@
 | A4 距离比对/判决 | 🟢 **完工** | A4-02 ✅ d_min 实时比对；A4-03 ✅ 连续帧防抖判决（报警/解除）；A4-04 ✅ Modbus RTU 从站+参数下发 |
 | A5 RS485 组网 | 🟡 **PC 侧已通 / 网关侧 A→B 已通、B→A 未稳定（2026-10-16 更新）** | A5-01 ✅ USART3+RS485 硬件就绪；**PC 适配器作主站侧**根因 = 模块 TTL 侧 `TXD`/`RXD` 接反（应为 `TXD`→PD9、`RXD`→PD8），对调后收到合法应答 `01 03 02 02 58 B8 DE`（数据 600 = 阈值 6.0，CRC 独立复核通过）。<br>**2026-10-16 网关侧进展（此前"断点在网关模组 `RXD`→`DI` 段"的结论已被推翻）**：<br>① ⛔ **旧结论作废** —— 16:48 未换件、未焊接、未改固件，**只改 TTL 接线**即收到 `0x2E` × 151 / 15.057 s ⇒ 数据本来就能到 `DI`，模组无板内断路。<br>② ✅ **A→B（主站发→从站收）已通**：接线改正后从站侧连续多次采集全为合法帧（`01 03 00 0n 00 01 CRC`），乱码消失；SWD 直读 `rx_buff` 同形。<br>③ 🟡 **B→A（从站发→主站收）未稳定**：5 轮观测仅 1 轮 5/5 全对，其余为"值整体前移一格" / `0x108` / 零字节。机理 = RTU 响应帧无事务号（esp-modbus issue #16）＋ 网关侧迟到帧被下一事务吃下。<br>⚠️ **待结**：`−6.35V` 待复测（`1.67V` 的"共地缺失"支已排除，但 `1.67V` 本身仍未解释） |
 | A6 报警输出 | 🔴 **未开始** | FEAT-A6-01/02/03 规格已立；**无报警驱动逻辑**。现有仅 `main.c:214` 绿灯开机指示（跑到 main USER CODE 2）与 `freertos.c:346` 红灯临时代码（`eMBInit`/`eMBEnable` 成功）；引脚预留见 `pin_config.h:50-55`（`LED_ALARM` PB0 / `LED_STATUS` PB1 / `BUZZER` PE6）及 `:87-90`（TIM3 PWM 通道，**未启用**） |
-| A7 辅助功能 | 🟡 **A7-02 代码落地（未实测）** | A7-02 IWDG 看门狗已落地（`iwdg_drv.c` + `WDTPollTask`：200ms 喂狗 / 1s 超时）且编译通过，但**未烧录实测、FEAT 文档仍标"🔴未开始"待归档**；A7-01 SHT30 / A7-03 Flash 未开始 |
+| A7 辅助功能 | 🟡 **A7-01/A7-02 代码落地，均未验收** | A7-01 SHT30 已落地（`BSP/sht30.c` + `sht30_task`：I2C3 PA8/PC9，2 s 刷新 `g_temp_x10`/`g_humi_x10`，经 Modbus 寄存器 5/6 只读上传）；启用时暴露堆缺口 → BUG-20261029-001（已扩堆 32768 修复）。A7-02 IWDG 已落地（`BSP/iwdg_drv.c` + `WDTPollTask`：200 ms 喂狗 / 1 s 超时），编译通过但**未烧录实测**。A7-03 Flash 未开始；A7-04 MPU6050 / A7-05 多源融合均为计划书阶段（未实施） |
 
 ### 近期真实 Bug（均为真机实测发现）
 
@@ -49,7 +49,7 @@
 
 ## 软件环境
 
-- RTOS：FreeRTOS CMSIS-RTOS_v2（5 个任务：defaultTask / specTask / displayTask / mbSlave / wdt）
+- RTOS：FreeRTOS CMSIS-RTOS_v2（6 个任务：defaultTask / specTask / displayTask / mbSlave / wdt / sht30Task）
 - 驱动库：STM32 HAL（CubeMX 生成，`soundDog.ioc`）
 - 构建：Makefile + mingw32-make + arm-none-eabi-gcc（`C:\ST\STM32CubeCLT_1.21.0\`）
 - 通信：USART1 调试口（115200，单写者=specTask）；USART3 RS485（MAX3485，Modbus RTU 从站）
