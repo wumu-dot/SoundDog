@@ -134,15 +134,15 @@ firmware/soundDog/      STM32 工程（CubeMX 生成 + 手写驱动）
   │     i2s_drv.c       手写 I2S3 DMA 双缓冲采集驱动
   │     iwdg_drv.c      IWDG 独立看门狗驱动（A7-02；喂狗走独立任务，禁 ISR 喂）
   │     rs485_drv.c     RS485 方向/收发封装。**Modbus 收发主路径走 `portserial.c`**；
-  │                     本文件 `RS485_Init()` 仍在役（`main.c:275` 启动调用）、
-  │                     `RS485_Send()` 被 `portserial.c:253` 回环探针调用（随探针一并移除）、
-  │                     仅 `RS485_Receive()` 只出现在 `main.c:277-295` 的 `#if 0` 段
+  │                     本文件 `RS485_Init()` 仍在役（`main.c:275` 启动调用）；
+  │                     `RS485_Send()` / `RS485_Receive()` 现仅存于 `main.c:277-295` 的 `#if 0` 段
+  │                     （原先由 `portserial.c` 的回环探针调用，探针已于 2026-10-27 物理删除）
   │     spectrum.c/fft.c/mfcc.c/mel.c/mfcc_dct.c/model_normal.c/dist.c/debounce.c ...  DSP 链
   │     oled_drv.c       OLED 显示驱动
   ├── Inc/pin_config.h  引脚映射权威来源（改引脚只改这一个文件）
   ├── Src/              CubeMX 生成的 HAL 启动/外设初始化（stm32f4xx_*.c、i2s.c、dma.c…）
   ├── Middlewares/Third_Party/FreeModbus/port/cmsis_rtos2/
-  │     portserial.c    Modbus 串口 port（RX 帧缓冲/回环探针，受 MB_PROBE_ENABLE 开关）
+  │     portserial.c    Modbus 串口 port（RX 帧缓冲 + 收发状态机；回环探针已于 2026-10-27 物理删除）
   │     portevent.c     Modbus 事件 flag 分发（P2-10）
   │     portcritical.c  全局临界区（0 基址注意见记忆 R34）
   │     porttimer.c     Modbus RTU T3.5 定时器 port
