@@ -24,3 +24,7 @@ compile_commands*.json
 # IDE/工具内存目录（.trae=AI IDE 工作区状态，.workbuddy=agent 记忆，均非源码，2026-09-17 排除）
 .trae/
 .workbuddy/
+# 评测原始日志：只入库证据级的两个 1 h 段（安静/活动），其余过程日志留在本地
+data/*.log
+!data/eval_quiet_2026-11-05.log
+!data/eval_quiet_hour_2026-11-05.log
