@@ -255,6 +255,65 @@ static int s_prev_alarm = -1;               /* A4-03: 待打印事件状态（-1
 static int s_alarm_src = 0;                 /* A4-03: 事件来源（DB_SRC_*：解除=0/轨1=1/轨2=2） */
 static uint16_t s_alarm_count = 0u;         /* A4-03: 事件触发/解除帧数（AC-01/AC-02 记录值） */
 
+/* ---- FEAT-A7-06 S2：对比基线评测旁挂（只读，不参与判决） ----
+ * 快照由 SpecTask 每窗刷新，EVAL 行由 mel_frame_cb 每 10 帧输出（10 Hz）。
+ * 同一任务上下文（mfcc_feed 在 SpecTask 内同步回调），无并发问题。 */
+static int          s_alarm_state   = 0;     /* 防抖当前状态（0=正常 1=报警） */
+static float32_t    s_pcm_rms       = 0.0f;  /* E1 特征：原始 PCM 均方根（LSB） */
+static float32_t    s_pcm_peak      = 0.0f;  /* E1 特征：窗内 PCM 绝对峰值（LSB） */
+static uint32_t     s_band_sum      = 0u;    /* E2 特征：32 频带能量和 */
+static uint32_t     s_band_argmax   = 0u;    /* E2 特征：能量最大带号 */
+static uint32_t     s_eval_cnt      = 0u;    /* EVAL 节拍（10 帧 = 10 Hz） */
+static char         s_eval_line[80];         /* EVAL 行静态缓冲（~55B 最长） */
+
+/* ---- FEAT-A7-06 §14：噪声底与残差（**提示级**，不参与报警判决） ----
+ * 每频带维护「1 s 块最小值 + 每秒 2% 上升泄漏」的噪声底；残差比 = Σ带/Σ底。
+ * 只给 ALARM on 行追加 conf/res 提示字段；⛔ 不改 debounce 判决、不改 Modbus 寄存器。 */
+#define RES_PSEUDO_CNT  32.0f   /* 伪计数：BANDS 是 1 LSB 量化，底噪为 0 的频带直接相除会爆表 */
+#define RES_CONFIRM_TH  4.0f    /* 确认阈值（离线标定：活动 35→1 次/h，安静 1→1） */
+static float32_t s_res_floor[SPEC_BANDS];   /* 每带噪声底 */
+static float32_t s_res_min[SPEC_BANDS];     /* 当前 1 s 块的带最小 */
+static uint32_t  s_res_block_ms = 0u;       /* 块结算时刻 */
+static uint8_t   s_res_valid    = 0u;       /* 上电首个窗口初始化 */
+static float32_t s_res_ratio    = 1.0f;     /* 最近一窗的全带残差比 */
+static float32_t s_res_at_alarm = 0.0f;     /* 报警触发沿的残差比（打印用） */
+static uint8_t   s_res_confirmed = 0u;      /* 本次报警是否被残差确认（1=确认 0=疑似） */
+
+static void residual_update(const uint32_t *bands, uint32_t now_ms)
+{
+  float32_t sum_b = 0.0f, sum_f = 0.0f;
+
+  if (!s_res_valid) {
+    for (uint32_t b = 0u; b < SPEC_BANDS; b++) {
+      s_res_floor[b] = (bands[b] > 0u) ? (float32_t)bands[b] : 1.0f;
+      s_res_min[b]   = (float32_t)bands[b];
+    }
+    s_res_block_ms = now_ms;
+    s_res_valid = 1u;
+  } else {
+    for (uint32_t b = 0u; b < SPEC_BANDS; b++) {
+      float32_t v = (float32_t)bands[b];
+      if (v < s_res_min[b]) { s_res_min[b] = v; }
+    }
+    if ((uint32_t)(now_ms - s_res_block_ms) >= 1000u) {
+      for (uint32_t b = 0u; b < SPEC_BANDS; b++) {
+        float32_t cap = s_res_floor[b] * 1.02f;   /* 慢升：持续故障约 1 min 后被吸收 */
+        float32_t f   = s_res_min[b];
+        s_res_floor[b] = (f < cap) ? f : cap;
+        if (s_res_floor[b] < 1.0f) { s_res_floor[b] = 1.0f; }
+        s_res_min[b] = (float32_t)bands[b];
+      }
+      s_res_block_ms = now_ms;
+    }
+  }
+
+  for (uint32_t b = 0u; b < SPEC_BANDS; b++) {
+    sum_b += (float32_t)bands[b];
+    sum_f += s_res_floor[b];
+  }
+  s_res_ratio = (sum_b + RES_PSEUDO_CNT) / (sum_f + RES_PSEUDO_CNT);
+}
+
 static void mel_frame_cb(const float32_t *frame400)
 {
   (void)mel_process(frame400, s_mel_vals);
@@ -283,6 +342,37 @@ static void mel_frame_cb(const float32_t *frame400)
       s_prev_alarm = state;   /* 0=解除/1=报警（打印块沿检测用） */
       s_alarm_src = src;      /* 事件来源（诊断/评审） */
       s_alarm_count = cnt;    /* 触发/解除帧数（AC-01/AC-02 记录值） */
+      if (state) {            /* A7-06 §14：只在报警触发沿抓残差（提示级，不改判决） */
+        s_res_at_alarm  = s_res_ratio;
+        s_res_confirmed = (s_res_ratio > RES_CONFIRM_TH) ? 1u : 0u;
+      }
+    }
+    s_alarm_state = state;    /* A7-06: 每帧同步当前判决状态（EVAL 行输出用） */
+  }
+
+  /* ---- FEAT-A7-06 S2: EVAL 行（每 10 个 MFCC 帧 = 10 Hz，只读旁挂）----
+   * 字段：t=ms, d=×100, th=×100, rms=×100(PCM LSB), pk=×100,
+   *       bs=32 频带能量和, ba=最大带号, lv=0/1（防抖状态）,
+   *       res=×100（§14 噪声底残差比，只读旁挂；旧脚本按 len>=9 + 固定下标，追加兼容）
+   * ⛔ 不参与任何判决；PC 侧 scripts/eval_baselines.py 解析（§5/S1）。
+   * 10 Hz 而非 100 Hz：115200 已被 SPEC/BANDS 占用，秒级 TD 统计足够。 */
+  if (++s_eval_cnt >= 10u) {
+    s_eval_cnt = 0u;
+    debounce_param_t ep = debounce_get_param();      /* 副本（并发安全，同项3） */
+    int32_t len = snprintf(s_eval_line, sizeof(s_eval_line),
+                           "EVAL,%lu,%ld,%ld,%ld,%ld,%lu,%lu,%d,%ld\r\n",
+                           (unsigned long)HAL_GetTick(),
+                           (long)(s_dmin * 100.0f),
+                           (long)(ep.threshold * 100.0f),
+                           (long)(s_pcm_rms * 100.0f),
+                           (long)(s_pcm_peak * 100.0f),
+                           (unsigned long)s_band_sum,
+                           (unsigned long)s_band_argmax,
+                           s_alarm_state,
+                           (long)(s_res_ratio * 100.0f));   /* A7-06 §14：第 10 字段=残差比 */
+    if (len > 0 && (size_t)len < sizeof(s_eval_line)) {
+      (void)HAL_UART_Transmit(&huart1, (uint8_t *)s_eval_line,
+                              (uint16_t)len, 100u);
     }
   }
 }
@@ -497,6 +587,36 @@ static void SpecTask(void *argument)
 
     spec_process(pcm256, bands);
 
+    /* ---- FEAT-A7-06 S2: 基线特征快照（供 EVAL 行输出）----
+     * E1：原始 PCM（非加窗帧）的均方根与绝对峰值 —— 加窗帧含 Hamming 衰减，
+     *     不适合作为能量基线；
+     * E2：32 频带能量和 + 最大带号（完整 32 维仍由 BANDS 行采集）。
+     * 成本 ~256 乘加/窗 ×125 窗/s ≈ 32k 乘加/s，可忽略。 */
+    {
+      float32_t sq = 0.0f;
+      float32_t pk = 0.0f;
+      for (uint32_t i = 0u; i < (uint32_t)SPEC_WINDOW; i++) {
+        float32_t v = (float32_t)pcm256[i];
+        sq += v * v;
+        float32_t a = (v < 0.0f) ? -v : v;
+        if (a > pk) { pk = a; }
+      }
+      arm_sqrt_f32(sq / (float32_t)SPEC_WINDOW, &s_pcm_rms);
+      s_pcm_peak = pk;
+
+      uint32_t sum = 0u;
+      uint32_t amax = 0u;
+      for (uint32_t i = 0u; i < (uint32_t)SPEC_BANDS; i++) {
+        sum += bands[i];
+        if (bands[i] > bands[amax]) { amax = i; }
+      }
+      s_band_sum = sum;
+      s_band_argmax = amax;
+    }
+
+    /* A7-06 §14：噪声底 + 残差比（提示级旁挂；62.5 Hz 刷新，32 次乘加/窗） */
+    residual_update(bands, HAL_GetTick());
+
     /* A3-01: MFCC 前置预处理旁路（设计定稿 §1.5：与频谱吃同段有效数据；
      * 丢帧窗在上方 continue 时两边同弃，流一致。内部 ~4 万乘加/秒。
      * 出帧时同步触发 mel_frame_cb → mel_process（逐帧，100 帧/s）。 */
@@ -674,9 +794,13 @@ static void SpecTask(void *argument)
      * 事件行与 DMIN 行独立 → 触发/解除瞬间即见，不依赖 1s 快照。 */
     if (s_prev_alarm >= 0) {
       if (s_prev_alarm) {
-        printf("ALARM on src=%s n=%lu\r\n",
+        /* A7-06 §14：追加 conf/res 提示字段（只读旁挂，判决已由 debounce 定稿）。
+         *   conf=1 残差确认（比值 > 4.0）｜0 疑似（不足 4 倍，多为环境声） */
+        printf("ALARM on src=%s n=%lu conf=%u res=%ld\r\n",
                (s_alarm_src == (int)DB_SRC_MOFN) ? "mofn" : "consec",
-               (unsigned long)s_alarm_count);
+               (unsigned long)s_alarm_count,
+               (unsigned int)s_res_confirmed,
+               (long)(s_res_at_alarm * 100.0f));
       } else {
         printf("ALARM off n=%lu\r\n", (unsigned long)s_alarm_count);
       }
