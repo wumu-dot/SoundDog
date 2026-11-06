@@ -274,25 +274,11 @@ printf("I2S_DRV_Init ret=%d (0=HAL_OK)\r\n", ret);
   MX_USART3_UART_Init();
   RS485_Init();
 
-#if 0   /* 回环自测已移入 freertos.c RS485LoopTask（BUG-20260902-001）
-         * ⚠️ 不能再放这里：本区在 osKernelStart 前、BASEPRI=0x50，
-         * SysTick 被 FreeRTOS 屏蔽 → HAL_UART_Receive 的 HAL_GetTick 超时
-         * 永不触发 → 死等卡死（与 BUG-20260829-006 OLED HAL_Delay 同根）。
-         * 移入 RTOS 任务后 HAL_UART_Receive 超时才有效。 */
-    {
-      uint8_t txbuf[] = "RS485_LOOP";
-      uint8_t rxbuf[16] = {0};
-      HAL_StatusTypeDef st = RS485_Send(txbuf, sizeof(txbuf) - 1);
-      printf("RS485_Send st=%d\r\n", st);
-      st = RS485_Receive(rxbuf, sizeof(txbuf) - 1);
-      printf("RS485_Receive st=%d rx='%s'\r\n", st, (char*)rxbuf);
-      if (st == HAL_OK)
-      {
-        int match = (memcmp(txbuf, rxbuf, sizeof(txbuf) - 1) == 0);
-        printf("RS485_LOOP %s\r\n", match ? "MATCH" : "MISMATCH");
-      }
-    }
-#endif
+  /* RS485 回环自测已移入 freertos.c 的 RS485LoopTask —— ⛔ 不要搬回这里：
+   * 本区在 osKernelStart() 前、BASEPRI=0x50，SysTick 被 FreeRTOS 屏蔽
+   * ⇒ HAL_GetTick() 冻结 ⇒ HAL_UART_Receive 的超时形同虚设 ⇒ 死等卡死
+   * （与 BUG-20260829-006 的 OLED HAL_Delay 同根）。
+   * 完整机理与证据链见 docs/bugs/BUG-20260902-001。死代码已于 2026-11-06 删除。 */
 
   /* USER CODE END 2 */
 
