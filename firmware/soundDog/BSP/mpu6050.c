@@ -178,6 +178,39 @@ int mpu6050_init(void)
     printf("[MPU] ok: WHO_AM_I=0x%02X  SMPLRT_DIV=%u (Fs=8k/%u=500Hz) DLPF=%u(260Hz) AFS=+-8g CLKSEL=PLL-Xgyro\r\n",
            (unsigned)who, (unsigned)REG_SMPLRT_DIV_VAL,
            (unsigned)(REG_SMPLRT_DIV_VAL + 1u), (unsigned)REG_CONFIG_VAL);
+
+    /* ④ 配置读回校验（FEAT-A7-08 AC-2，强制项）
+     *    写进去 ≠ 生效：寄存器可能被复位/被其他逻辑覆盖/写时序不对。
+     *    只有读回一致才算配置成功——否则后面采到的数据不可信。 */
+    {
+        uint8_t rb[4] = {0xFFu, 0xFFu, 0xFFu, 0xFFu};
+        const uint8_t regs[4] = {REG_PWR_MGMT_1, REG_SMPLRT_DIV, REG_CONFIG, REG_ACCEL_CONFIG};
+        const uint8_t want[4] = {REG_PWR_MGMT_VAL, REG_SMPLRT_DIV_VAL,
+                                 REG_CONFIG_VAL, REG_ACCEL_CFG_VAL};
+        uint8_t mism = 0u;
+
+        for (uint8_t k = 0u; k < 4u; k++) {
+            if (mpu_read_regs(regs[k], &rb[k], 1u) != 0) {
+                rb[k] = 0xFFu;
+            }
+            if (rb[k] != want[k]) {
+                mism++;
+            }
+        }
+        printf("[MPU] readback: 6B=%02X(期望%02X) 19=%02X(%02X) 1A=%02X(%02X) 1C=%02X(%02X) %s\r\n",
+               (unsigned)rb[0], (unsigned)want[0],
+               (unsigned)rb[1], (unsigned)want[1],
+               (unsigned)rb[2], (unsigned)want[2],
+               (unsigned)rb[3], (unsigned)want[3],
+               (mism == 0u) ? "OK" : "MISMATCH");
+
+        if (mism != 0u) {
+            printf("[MPU] config mismatch: %u/4 —— 数据不可信，任务将不采集\r\n", (unsigned)mism);
+            s_present = 0u;
+            return -1;
+        }
+    }
+
     return 0;
 }
 
@@ -214,8 +247,17 @@ static void mpu_calibrate(void)
     for (uint8_t k = 0u; k < 3u; k++) {
         s_zero[k] = (float)sum[k] / (float)n;
     }
-    printf("[MPU] calibrate done n=%u zero=(%.1f,%.1f,%.1f) LSB\r\n",
-           (unsigned)n, s_zero[0], s_zero[1], s_zero[2]);
+
+    /* 自检（FEAT-A7-08 S3）：静止时合成重力应为 1 g = 4096 LSB（±8 g 档）。
+     * 偏离过大 ⇒ 标定期间有振动/倾斜，或量程配置不对 ⇒ 基线不可用，必须重标。 */
+    {
+        float mag = sqrtf(s_zero[0] * s_zero[0] + s_zero[1] * s_zero[1] + s_zero[2] * s_zero[2]);
+        float lo = 4096.0f * 0.90f;
+        float hi = 4096.0f * 1.10f;
+        printf("[MPU] calibrate done n=%u zero=(%.1f,%.1f,%.1f) LSB |g|=%.0f %s\r\n",
+               (unsigned)n, s_zero[0], s_zero[1], s_zero[2], mag,
+               (mag >= lo && mag <= hi) ? "OK" : "OUT-OF-RANGE(expect 4096+-10%)");
+    }
 }
 
 /* ================================================================
