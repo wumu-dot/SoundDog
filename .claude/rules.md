@@ -150,7 +150,9 @@
 
 ## §5 快速路径（机械改动豁免，防止"改个宏也要等确认"）
 
-适用：改引脚号/波特率/宏定义值/纯注释/Makefile 加一行登记——**不涉及逻辑变更**。
+适用：改引脚号/波特率/宏定义值/纯注释/**在 `sources.mk` 的 `PROJECT_C_SOURCES` 加一行**——**不涉及逻辑变更**。
+> 🔴 **新增源文件只改 `firmware/soundDog/sources.mk`，⛔ 不改 CubeMX 生成的 `Makefile`**（`Makefile` 在重新 GENERATE CODE 时会被整体重写，手改必丢——前科 `BUG-20260728-001`；`sources.mk` 就是为此拆出来的，其文件头已写明"新增手写 .c：只改本文件 PROJECT_C_SOURCES"）。
+> 同理：ESP32 侧新增源文件走 `main/CMakeLists.txt` 的 `idf_component_register(SRCS ...)`，⛔ 不碰 `build/` 下任何文件。
 豁免：R9 全量影响地图、R27 GitHub 调研。
 必做：R20 引脚一致性（涉及时）+ 编译验证（R21 证据）+ 一句话影响说明（改了什么、为什么无连锁）。
 不适用：任何触及 ISR/任务调度/数据流/串口字符串契约/初始化顺序的改动——这些走完整 R9 流程（A2 教训：一行 printf 搬家破坏契约、初始化重排修黑屏）。
