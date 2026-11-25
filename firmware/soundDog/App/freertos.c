@@ -30,6 +30,7 @@
 #include "spectrum.h"        /* A2-02: spec_process + 峰值/噪声底 getter */
 #include "oled_drv.h"        /* A2-03: OLED_DrawSpectrum + 错误计数 */
 #include "sht30.h"           /* A7-01: SHT30 温湿度（I2C3）轮询任务 */
+#include "mpu6050.h"         /* A7-04: MPU6050 振动（I2C2）500 Hz 采集任务 */
 #include "usart.h"           /* A2-04: huart1（BANDS 行直接 Transmit） */
 #include "mfcc.h"            /* A3-01: 预加重+分帧+汉明窗旁路 */
 #include "mel.h"             /* A3-02: Mel 滤波器组（512 rfft + 32 维能量） */
@@ -119,6 +120,17 @@ static const osThreadAttr_t sht30Task_attributes = {
   .stack_size = 512 * 4,              /* 2KB（HAL I2C 调用链留余量） */
   .priority = (osPriority_t) osPriorityBelowNormal,
 };
+
+/* A7-04 振动采集任务
+ * 栈 1024B：HAL I2C 阻塞调用 + 6B 接收缓冲，无嵌套调用，深度浅。
+ * 优先级 BelowNormal（与 sht30 同级）：500 Hz 采样会被 Normal 任务抢占，
+ *   实际样本数 N 由任务自行打印；N 显著 <500 说明被饿死（见 mpu6050.c 注释）。 */
+static osThreadId_t mpuTaskHandle;
+static const osThreadAttr_t mpuTask_attributes = {
+  .name = "vib",
+  .stack_size = 1024,                 /* 1KB */
+  .priority = (osPriority_t) osPriorityBelowNormal,
+};
 /* USER CODE END Variables */
 /* Definitions for defaultTask */
 osThreadId_t defaultTaskHandle;
@@ -201,6 +213,11 @@ void MX_FREERTOS_Init(void) {
    *      不要直接下"任务不能用"的结论。 */
   sht30TaskHandle = osThreadNew(sht30_task, NULL, &sht30Task_attributes);
   (void)sht30TaskHandle;
+
+  /* A7-04 振动：I2C2（PF1/PF0）独立总线，500 Hz 采样，1 s 窗口结算 RMS/峰值。
+   * init 失败不阻塞启动——任务内每 10 s 重试，支持后接线。 */
+  mpuTaskHandle = osThreadNew(mpu6050_task, NULL, &mpuTask_attributes);
+  (void)mpuTaskHandle;
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */

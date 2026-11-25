@@ -70,6 +70,20 @@
 #define SHT30_I2C_ADDR      0x44
 
 /* ================================================================
+ * I2C2 — MPU6050 振动（A7-04，独立总线，不与 OLED/SHT30 共用）
+ *
+ * PF1 = I2C2_SCL (AF4)   PF0 = I2C2_SDA (AF4)
+ * 两脚在 gpio.c 中原始为 ANALOG（未占用）；FMC 业务代码未使用。
+ * AD0 必须接 GND ⇒ 地址 0x68（悬空则可能 0x69）。
+ * ================================================================ */
+#define MPU_I2C             I2C2
+#define MPU_I2C_SCL_PIN     GPIO_PIN_1
+#define MPU_I2C_SCL_PORT    GPIOF
+#define MPU_I2C_SDA_PIN     GPIO_PIN_0
+#define MPU_I2C_SDA_PORT    GPIOF
+#define MPU_I2C_ADDR        0x68
+
+/* ================================================================
  * USART3 — RS485 MAX3485 (预留，待 CubeMX 配置)
  * ================================================================ */
 #define RS485_UART          USART3

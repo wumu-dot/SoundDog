@@ -26,6 +26,7 @@ PROJECT_C_SOURCES = \
   BSP/i2s_drv.c \
   BSP/rs485_drv.c \
   BSP/iwdg_drv.c \
+  BSP/mpu6050.c \
   App/rtos_hooks.c \
   BSP/fft.c \
   BSP/spectrum.c \
