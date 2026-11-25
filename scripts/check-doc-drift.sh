@@ -104,8 +104,13 @@ detect_build() {
 
 detect_tasks() {
     local bare=0 cmsis=0
-    bare=$(find "$SRC_DIR" -name "*.c" 2>/dev/null | grep -vE "$SKIP_DIRS" | xargs grep -ch "xTaskCreate(" 2>/dev/null | awk '{sum+=$1} END{print sum+0}' || echo 0)
-    cmsis=$(find "$SRC_DIR" -name "*.c" 2>/dev/null | grep -vE "$SKIP_DIRS" | xargs grep -ch "osThreadNew(" 2>/dev/null | awk '{sum+=$1} END{print sum+0}' || echo 0)
+    # ⚠️ 2026-11-26 修：原用 `find | xargs grep -ch`，但本机 xargs 会因
+    #   `assertion "bc_ctl.arg_max >= LINE_MAX" failed` 中止，管道静默返回 0
+    #   ⇒ detect_tasks 恒为 0 ⇒ 被当成"任务尚未创建"跳过，该字段从未被真正校验。
+    #   改为 grep -r（不经过 xargs），语义等价（统计匹配行数）。
+    local EXC="--exclude-dir=lvgl --exclude-dir=Drivers --exclude-dir=Middlewares --exclude-dir=components --exclude-dir=node_modules"
+    bare=$(grep -r --include="*.c" $EXC -h "xTaskCreate(" "$SRC_DIR" 2>/dev/null | wc -l)
+    cmsis=$(grep -r --include="*.c" $EXC -h "osThreadNew(" "$SRC_DIR" 2>/dev/null | wc -l)
     echo $((bare + cmsis))
 }
 

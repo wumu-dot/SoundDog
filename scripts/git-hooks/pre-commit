@@ -1,0 +1,30 @@
+#!/bin/sh
+# SoundDog pre-commit 门禁（源码入库，安装见下）
+# 安装：cp scripts/git-hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+#
+# 四项检查（2026-11-26 P2 起）：
+#   1) R19 禁区       —— 底层库文件不可改          scripts/check_r19_zone.ps1
+#   2) R27 三源       —— 新增 API 无证据则拦        scripts/check_r27_research.ps1
+#   3) 规则引用悬空   —— 路径/§/R 号不存在则拦      scripts/check_rule_refs.py --fail  【新增】
+#   4) 文档漂移       —— CLAUDE.md DOC-STATE 与源码不符则拦  scripts/check-doc-drift.sh  【新增】
+#
+# 原则：只在失败时输出检查详情，正常提交保持安静（否则每次提交刷屏，人会关掉钩子）。
+# 逃生口：git commit --no-verify，须在提交说明登记理由。
+
+PY="$(command -v python3 || command -v python || command -v py)"
+
+# 1) R19 禁区
+powershell -NoProfile -ExecutionPolicy Bypass -File "scripts/check_r19_zone.ps1" || exit 1
+
+# 2) R27 三源
+powershell -NoProfile -ExecutionPolicy Bypass -File "scripts/check_r27_research.ps1" || exit 1
+
+# 3) 规则引用悬空（默认只报告，--fail 才拦）
+if [ -n "$PY" ]; then
+    OUT=$("$PY" scripts/check_rule_refs.py --fail 2>&1) || { echo "$OUT"; exit 1; }
+else
+    echo "[hook] ⚠️ 未找到 python，跳过规则引用检查" >&2
+fi
+
+# 4) 文档漂移（此前只在 ci_local 里跑，提交时不拦）
+OUT=$(bash scripts/check-doc-drift.sh 2>&1) || { echo "$OUT"; exit 1; }
