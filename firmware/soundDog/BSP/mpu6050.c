@@ -39,7 +39,22 @@
 #define MPU_ADDR8           (MPU6050_ADDR << 1)
 #define MPU_TMO_MS          20u
 
-/* ---------------- 采样与窗口 ---------------- */
+/* ---------------- 采样与窗口 ----------------
+ * ⚠️ 采样率推导（RM-MPU-6000A Rev4.0 §4.2/§4.3，2026-11-25 核对）：
+ *    Sample Rate = Gyroscope Output Rate / (1 + SMPLRT_DIV)
+ *    Gyro Output Rate = 8 kHz when DLPF_CFG = 0 or 7；1 kHz when DLPF_CFG = 1~6
+ *    本驱动取 DLPF_CFG = 0（带宽 260 Hz，芯片上限）
+ *      ⇒ Fs = 8 kHz ⇒ SMPLRT_DIV = 15 得 8000/(1+15) = 500 Hz  ✓
+ *    ⛔ 若误写 SMPLRT_DIV=1，会得到 4000 Hz；而手册明示
+ *       "accelerometer output rate is 1 kHz … sample may be output more than once"
+ *       ⇒ 每 4 个读数有 3 个重复，严重污染 RMS/峰值统计。 */
+#define REG_SMPLRT_DIV_VAL  0x0Fu            /* 8 kHz / (1+15) = 500 Hz */
+#define REG_CONFIG_VAL      0x00u            /* DLPF_CFG=0 → Accel 260 Hz（芯片上限）*/
+#define REG_ACCEL_CFG_VAL   0x10u            /* AFS_SEL=2 → ±8 g，4096 LSB/g */
+#define REG_PWR_MGMT_VAL    0x01u            /* 清 SLEEP + CLKSEL=1（PLL 由 X 轴陀螺参考）
+                                              * 手册原文：highly recommended，用陀螺作参考可提高稳定性；
+                                              * ⛔ 写 0x00 会退回内部 8 MHz RC，频率随温漂 */
+
 #define SAMPLE_HZ           500u
 #define SAMPLE_MS           2u                       /* 1000/500 */
 #define WIN_SAMPLES         SAMPLE_HZ                /* 1 s 窗口 */
@@ -47,6 +62,11 @@
 #define LSB_PER_G           4096.0f                  /* ±8 g */
 #define MG_PER_LSB          (1000.0f / LSB_PER_G)
 #define VIB_MAX_MG          5000u
+#define CLIP_LSB            32000  /* ±8g 满量程 32768，留 2.3% 余量判削顶 */
+
+/* 上电时序（RM-MPU-6000A / 产品规格书）：复位后 100 ms、唤醒后 ≥30 ms 再配置 */
+#define RESET_WAIT_MS       100u
+#define WAKE_WAIT_MS        50u
 
 /* ---------------- 状态 ---------------- */
 static I2C_HandleTypeDef s_hi2c2;
@@ -138,14 +158,26 @@ int mpu6050_init(void)
         return -1;
     }
 
-    /* ③ 配置序列（顺序有意义：先唤醒再改配置） */
-    if (mpu_write_reg(REG_PWR_MGMT_1,   0x00u) != 0) { printf("[MPU] wake fail\r\n");   return -1; }
-    if (mpu_write_reg(REG_SMPLRT_DIV,   0x01u) != 0) { printf("[MPU] ODR fail\r\n");    return -1; } /* 1 kHz/(1+1)=500 Hz */
-    if (mpu_write_reg(REG_CONFIG,       0x00u) != 0) { printf("[MPU] DLPF fail\r\n");   return -1; } /* 260 Hz */
-    if (mpu_write_reg(REG_ACCEL_CONFIG, 0x10u) != 0) { printf("[MPU] range fail\r\n");  return -1; } /* ±8 g */
+    /* ③ 配置序列（顺序与等待时间均有手册依据）
+     *   1) DEVICE_RESET=1 使寄存器回到已知默认态，再等 100 ms
+     *   2) 清 SLEEP + 选 PLL(X gyro) 作时钟源，等 50 ms 让陀螺稳定
+     *   3) 依次写 ODR 分频 / DLPF / 量程 */
+    if (mpu_write_reg(REG_PWR_MGMT_1, 0x80u) != 0) { printf("[MPU] reset fail\r\n"); return -1; }
+    vTaskDelay(pdMS_TO_TICKS(RESET_WAIT_MS));
+
+    if (mpu_write_reg(REG_PWR_MGMT_1, REG_PWR_MGMT_VAL) != 0) {
+        printf("[MPU] wake fail\r\n"); return -1;
+    }
+    vTaskDelay(pdMS_TO_TICKS(WAKE_WAIT_MS));
+
+    if (mpu_write_reg(REG_SMPLRT_DIV,   REG_SMPLRT_DIV_VAL) != 0) { printf("[MPU] ODR fail\r\n");   return -1; }
+    if (mpu_write_reg(REG_CONFIG,       REG_CONFIG_VAL)     != 0) { printf("[MPU] DLPF fail\r\n");  return -1; }
+    if (mpu_write_reg(REG_ACCEL_CONFIG, REG_ACCEL_CFG_VAL)  != 0) { printf("[MPU] range fail\r\n"); return -1; }
 
     s_present = 1u;
-    printf("[MPU] ok: WHO_AM_I=0x%02X  ODR=500Hz DLPF=260Hz FS=+-8g\r\n", (unsigned)who);
+    printf("[MPU] ok: WHO_AM_I=0x%02X  SMPLRT_DIV=%u (Fs=8k/%u=500Hz) DLPF=%u(260Hz) AFS=+-8g CLKSEL=PLL-Xgyro\r\n",
+           (unsigned)who, (unsigned)REG_SMPLRT_DIV_VAL,
+           (unsigned)(REG_SMPLRT_DIV_VAL + 1u), (unsigned)REG_CONFIG_VAL);
     return 0;
 }
 
@@ -197,6 +229,7 @@ void mpu6050_task(void *argument)
     float    acc_sq = 0.0f;     /* Σ(ax²+ay²+az²)，单位 LSB² */
     float    peak_lsb = 0.0f;
     uint16_t n = 0u;
+    uint16_t clip = 0u;
     TickType_t last = xTaskGetTickCount();
 
     for (;;) {
@@ -214,12 +247,25 @@ void mpu6050_task(void *argument)
         acc_sq = 0.0f;
         peak_lsb = 0.0f;
         n = 0u;
+        clip = 0u;
 
         for (uint16_t i = 0u; i < WIN_SAMPLES; i++) {
             if (mpu_read_regs(REG_ACCEL_XOUT_H, buf, 6u) == 0) {
-                float ax = (float)(int16_t)(((uint16_t)buf[0] << 8) | buf[1]) - s_zero[0];
-                float ay = (float)(int16_t)(((uint16_t)buf[2] << 8) | buf[3]) - s_zero[1];
-                float az = (float)(int16_t)(((uint16_t)buf[4] << 8) | buf[5]) - s_zero[2];
+                int16_t r0 = (int16_t)(((uint16_t)buf[0] << 8) | buf[1]);
+                int16_t r1 = (int16_t)(((uint16_t)buf[2] << 8) | buf[3]);
+                int16_t r2 = (int16_t)(((uint16_t)buf[4] << 8) | buf[5]);
+
+                /* 削顶检测（±8 g ⇒ 满量程 32768 LSB）：接近满量程说明量程不够，
+                 * RMS/峰值会被低估（方波化），必须显式告警而不是照常输出。 */
+                if (r0 > CLIP_LSB || r0 < -CLIP_LSB ||
+                    r1 > CLIP_LSB || r1 < -CLIP_LSB ||
+                    r2 > CLIP_LSB || r2 < -CLIP_LSB) {
+                    clip++;
+                }
+
+                float ax = (float)r0 - s_zero[0];
+                float ay = (float)r1 - s_zero[1];
+                float az = (float)r2 - s_zero[2];
                 float a2 = ax * ax + ay * ay + az * az;   /* 合成加速度平方 */
                 acc_sq += a2;
                 if (a2 > peak_lsb * peak_lsb) {
@@ -244,6 +290,11 @@ void mpu6050_task(void *argument)
             /* 每窗口一行：N 用于判断采样是否被饿死（<300 即退化） */
             printf("VIB,%lu,%lu,%u\r\n",
                    (unsigned long)rms_mg, (unsigned long)peak_mg, (unsigned)n);
+
+            if (clip > 0u) {
+                printf("[MPU] WARN clip=%u/%u (range +-8g too small, RMS underestimated)\r\n",
+                       (unsigned)clip, (unsigned)n);
+            }
         } else {
             /* 整窗读失败 ⇒ 器件掉线，重新探测 */
             printf("[MPU] window lost, re-probe\r\n");
